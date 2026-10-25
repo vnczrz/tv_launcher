@@ -4,7 +4,9 @@ import static org.junit.Assert.assertEquals;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.junit.Test;
 
@@ -33,6 +35,14 @@ public class TilesTest {
     public void noLiveTileWithoutYouTubeTv() {
         List<Tiles.Tile> found = Arrays.asList(app("com.netflix.ninja", "Netflix"));
         assertEquals(Arrays.asList("NETFLIX"), labels(Tiles.arrange(found, VoxConfig.DEFAULT_HIDDEN)));
+    }
+
+    @Test
+    public void noLiveTileWhenYouTubeTvIsHidden() {
+        List<Tiles.Tile> found = Arrays.asList(app(Tiles.YOUTUBE_TV, "YouTube TV"), app("com.netflix.ninja", "Netflix"));
+        Set<String> hidden = new HashSet<>(VoxConfig.DEFAULT_HIDDEN);
+        hidden.add(Tiles.YOUTUBE_TV);
+        assertEquals(Arrays.asList("NETFLIX"), labels(Tiles.arrange(found, hidden)));
     }
 
     @Test

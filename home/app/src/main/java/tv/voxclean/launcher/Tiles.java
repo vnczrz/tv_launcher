@@ -51,7 +51,7 @@ final class Tiles {
 
     /**
      * @param found the exported leanback activities, already without Vox itself
-     * @return Live first when YouTube TV is installed, then the visible apps in order; one tile per package and name
+     * @return Live first when YouTube TV is installed and not hidden, then the visible apps in order; one tile per package and name
      */
     static List<Tile> arrange(List<Tile> found, Set<String> hidden) {
         List<Tile> apps = new ArrayList<>();
@@ -68,7 +68,8 @@ final class Tiles {
             int byName = a.label.compareTo(b.label);
             return byName != 0 ? byName : a.key.compareTo(b.key);
         });
-        if (youtubeTv) apps.add(0, Tile.live());
+        // Live is a door into YouTube TV, so it follows that app: gone when YouTube TV is missing or hidden.
+        if (youtubeTv && !hidden.contains(YOUTUBE_TV)) apps.add(0, Tile.live());
         return apps;
     }
 

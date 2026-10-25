@@ -493,6 +493,11 @@ public class MainActivity extends Activity {
         return arrow(keyCode) != null || super.onKeyUp(keyCode, event);
     }
 
+    /** Focus and Home-intent logging, off unless switched on over ADB: setprop log.tag.Vox DEBUG */
+    private static boolean debug() {
+        return Log.isLoggable(TAG, Log.DEBUG);
+    }
+
     private static Grid.Key arrow(int keyCode) {
         switch (keyCode) {
             case KeyEvent.KEYCODE_DPAD_UP: return Grid.Key.UP;
@@ -510,7 +515,7 @@ public class MainActivity extends Activity {
 
     private void moveFocus(Grid.Key key) {
         Grid next = focus.move(key, tiles.size());
-        Log.d(TAG, key + ": " + focus + " -> " + next);
+        if (debug()) Log.d(TAG, key + ": " + focus + " -> " + next);
         if (next.equals(focus)) return;
         if (next.page != focus.page) {
             turnTo(next);
@@ -526,7 +531,8 @@ public class MainActivity extends Activity {
         turning = true;
         gridLayer.animate().cancel();
         gridLayer.animate().alpha(0f).setDuration(PAGE_FADE_MS).withEndAction(() -> {
-            focus = next;
+            // Clamped: apps removed during the fade may have shortened or dropped the target page.
+            focus = next.clamp(tiles.size());
             rememberFocusedKey();
             render();
             gridLayer.animate().alpha(1f).setDuration(PAGE_FADE_MS).withEndAction(() -> turning = false).start();
@@ -569,7 +575,7 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        Log.d(TAG, "onNewIntent " + intent + " stopped=" + stopped + " focus " + focus);
+        if (debug()) Log.d(TAG, "onNewIntent " + intent + " stopped=" + stopped + " focus " + focus);
         // From an app (Home was stopped) focus stays on the tile it was on; only Home on Home resets.
         if (stopped || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
         Grid first = Grid.first();

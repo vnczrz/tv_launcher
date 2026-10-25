@@ -96,6 +96,16 @@ public class GridTest {
     }
 
     @Test
+    public void aPageTurnTargetIsClampedWhenAppsGoAwayDuringTheFade() {
+        // Right from page 2's bottom row aims at page 3 (17 tiles); then 1 app is removed, then 9 more.
+        Grid target = tile(1, 7).move(Grid.Key.RIGHT, 17);
+        assertEquals(tile(2, 0), target);
+        assertEquals(tile(1, 0), target.clamp(16));
+        assertEquals(tile(0, 0), target.clamp(7));
+        assertTrue(target.clamp(0).header);
+    }
+
+    @Test
     public void clampKeepsFocusInsideFewerTiles() {
         assertEquals(tile(1, 0), tile(2, 0).clamp(9));
         assertEquals(tile(0, 4), tile(0, 7).clamp(5));

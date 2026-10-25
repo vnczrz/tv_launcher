@@ -174,7 +174,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** config.json from the app's external files directory, where tools/home-config.sh pushes it. */
+    /** config.json from the app's external files directory, where home/home-config.sh pushes it. */
     private VoxConfig readConfig() {
         File dir = getExternalFilesDir(null);
         File file = dir != null ? new File(dir, VoxConfig.FILE_NAME) : null;

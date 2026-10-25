@@ -10,7 +10,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * config.json, pushed by tools/home-config.sh. Every key is optional; a key with a bad value is ignored on its
+ * config.json, pushed by home/home-config.sh. Every key is optional; a key with a bad value is ignored on its
  * own, and a file that does not parse is ignored as a whole (upstream's theme rule).
  */
 final class VoxConfig {

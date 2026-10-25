@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Push a config.json to Vox (home/, tv.voxclean.launcher) and restart it so it reads the file.
-#   TV_HOST=<tv ip> tools/home-config.sh path/to/config.json
-#   TV_HOST=<tv ip> tools/home-config.sh --reset        remove it: every value back to the default
+#   TV_HOST=<tv ip> home/home-config.sh path/to/config.json
+#   TV_HOST=<tv ip> home/home-config.sh --reset       remove it: every value back to the default
 # Keys (all optional; a bad value is ignored on its own, a file that does not parse is ignored as a whole):
 #   focus_scale, greetings {morning|afternoon|evening|late: [lines]}, app_lines, live_uri, hidden_apps,
 #   saver_entry_speed, saver_tracking_em.
-# The file goes to Vox's external files directory. On Android 14 the shell can write there, but the file it
-# creates belongs to the shell; Vox reading it is checked on the device (logcat -s Vox prints what it read).
+# The file goes to Vox's external files directory (/sdcard/Android/data/<pkg>/files), which the shell can write on
+# Android 14; there the copy belongs to Vox's uid and Vox reads it (Google TV 14). logcat -s Vox prints what it read.
 set -euo pipefail
 : "${TV_HOST:?set TV_HOST to the TV IP address, e.g. TV_HOST=192.168.1.50 $0 config.json}"
-# TOOLS=<dir>: another checkout's tools/ whose venv and ADB key to use (default: this one).
-TOOLS="$(cd "${TOOLS:-$(dirname "$0")}" && pwd)"
+# TOOLS=<dir>: a tools/ with its venv and ADB key (default: this repo's tools/).
+TOOLS="$(cd "${TOOLS:-$(dirname "$0")/../tools}" && pwd)"
 PY=$TOOLS/venv/bin/python
 [ -x "$PY" ] || { echo "run: python3 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt" >&2; exit 1; }
 tv() { "$PY" -I "$TOOLS/tv.py" "$@"; }

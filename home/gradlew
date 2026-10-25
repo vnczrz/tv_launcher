@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs upstream's Gradle wrapper (launcher/gradlew) on this project, so the repo keeps a single wrapper jar.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+exec "$HERE/../launcher/gradlew" -p "$HERE" "$@"

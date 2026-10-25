@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">Vox</string>
+    <!-- %1$s: the tile's name, in caps. -->
+    <string name="cant_open">CAN\'T OPEN %1$s</string>
+    <string name="page_label">PAGE %1$d / %2$d</string>
+
+    <color name="page">#FFFFFF</color>
+    <color name="tile">#F4F4F4</color>
+    <color name="ink">#161616</color>
+    <color name="muted">#8D8D8D</color>
+    <color name="dot">#D0D0CE</color>
+</resources>

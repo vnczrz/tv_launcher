@@ -74,10 +74,12 @@ if ! printf '%s' "$START" | grep -qF 'Status: ok' || printf '%s' "$START" | grep
   exit 1
 fi
 
-# Wi-Fi name in the header (Android 10+), and the screensaver's foreground app (lane 4) from UsageStats.
+# Wi-Fi name in the header (Android 10+), the screensaver's foreground app from UsageStats, and Vox's screensaver
+# in place of upstream's (undo: settings put secure screensaver_components com.gathin.tvhome/.ClockDream).
 printf '%s\n' \
   "pm grant $VOX android.permission.ACCESS_FINE_LOCATION && echo location granted" \
   "appops set $VOX GET_USAGE_STATS allow && appops write-settings && echo usage stats allowed" \
+  "settings put secure screensaver_components $VOX/.VoxDream && echo screensaver set" \
   "cmd package compile -m speed -f $VOX" \
   "cmd package set-home-activity --user 0 $VOX_HOME" \
   | tv --batch

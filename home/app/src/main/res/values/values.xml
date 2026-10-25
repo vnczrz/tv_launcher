@@ -4,10 +4,24 @@
     <!-- %1$s: the tile's name, in caps. -->
     <string name="cant_open">CAN\'T OPEN %1$s</string>
     <string name="page_label">PAGE %1$d / %2$d</string>
+    <string name="moving_hint">MOVING · ARROWS TO PLACE · OK TO DROP · BACK TO CANCEL</string>
+    <string name="cant_save">CAN\'T SAVE. THE CHANGE LASTS UNTIL HOME RESTARTS</string>
+    <string name="settings_title">SETTINGS</string>
+    <string name="library_title">LIBRARY</string>
+    <!-- %1$d: installed apps; %2$d: how many of them are on Home. -->
+    <string name="library_count">%1$d APPS · %2$d ON HOME</string>
+    <string name="on_home">ON HOME</string>
+    <string name="hidden">HIDDEN</string>
+    <string name="dream_label">Vox</string>
 
     <color name="page">#FFFFFF</color>
-    <color name="tile">#F4F4F4</color>
+    <!-- Tile colour, owner 2026-10-25: the voxel images' background is recoloured to exactly this. -->
+    <color name="tile">#E8E8E6</color>
     <color name="ink">#161616</color>
     <color name="muted">#8D8D8D</color>
     <color name="dot">#D0D0CE</color>
+    <color name="rule">#E6E6E3</color>
+    <color name="live">#E5141F</color>
+    <color name="saver_page">#E7E2D8</color>
+    <color name="saver_ink">#5E584C</color>
 </resources>

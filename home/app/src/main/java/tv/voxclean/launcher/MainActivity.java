@@ -85,6 +85,7 @@ public class MainActivity extends Activity {
     private Grid focus = Grid.first();
     /** The focused tile's key, so focus stays on the same app when tiles are added or removed. */
     private String focusedKey;
+    /** stopped: Home left the screen since it was last resumed (an app came in front). */
     private boolean started, stopped, stale = true, turning, okDown;
     private int packageSequence;
     private String greetingSlot;
@@ -302,6 +303,9 @@ public class MainActivity extends Activity {
         LinearLayout chip = new LinearLayout(this);
         chip.setGravity(Gravity.CENTER_VERTICAL);
         chip.setPadding(px(16), px(10), px(16), px(10));
+        // The focused icon grows to 1.25x past its own bounds; drawn into the padding, not cut at it.
+        chip.setClipToPadding(false);
+        chip.setClipChildren(false);
         icon.setImageResource(drawable);
         icon.setAlpha(CHIP_ICON_REST_ALPHA);
         chip.addView(icon, new LinearLayout.LayoutParams(px(28), px(28)));
@@ -506,6 +510,7 @@ public class MainActivity extends Activity {
 
     private void moveFocus(Grid.Key key) {
         Grid next = focus.move(key, tiles.size());
+        Log.d(TAG, key + ": " + focus + " -> " + next);
         if (next.equals(focus)) return;
         if (next.page != focus.page) {
             turnTo(next);
@@ -564,6 +569,7 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        Log.d(TAG, "onNewIntent " + intent + " stopped=" + stopped + " focus " + focus);
         // From an app (Home was stopped) focus stays on the tile it was on; only Home on Home resets.
         if (stopped || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
         Grid first = Grid.first();
@@ -587,7 +593,6 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         started = true;
-        stopped = false;
         IntentFilter time = new IntentFilter(Intent.ACTION_TIME_TICK);
         time.addAction(Intent.ACTION_TIME_CHANGED);
         time.addAction(Intent.ACTION_TIMEZONE_CHANGED);
@@ -600,6 +605,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // Cleared here, not in onStart: Home pressed in an app delivers onNewIntent after onStart (Android 14).
+        stopped = false;
         // A package change whose broadcast never arrived still shows up in PackageManager's change record.
         if (stale || changedSince(packageSequence).any) loadTiles();
     }
@@ -645,6 +652,7 @@ public class MainActivity extends Activity {
         art.clear();
         for (ImageView image : cellArt) image.setImageDrawable(null);
         stale = true;
+        Log.i(TAG, "memory trim " + level + ": tile artwork released until Home is back");
     }
 
     // ---- header ---------------------------------------------------------------------------------

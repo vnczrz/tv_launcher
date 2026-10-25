@@ -1,6 +1,9 @@
 package tv.voxclean.launcher;
 
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ComponentCallbacks2;
@@ -8,15 +11,19 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ChangedPackages;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
@@ -26,6 +33,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
@@ -35,17 +44,16 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.AccelerateDecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
+import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import java.net.Inet4Address;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -56,24 +64,39 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * Vox's Home: a header (greeting, Wi-Fi, gear, clock) over a paged 4x2 grid of square tiles. Laid out in
- * 1920x1080 design pixels scaled to the screen. Focus is Vox's own state (Grid), not Android's view focus:
- * the D-pad rules are the spec's, and the focused thing grows and darkens.
+ * Vox's Home: a header (greeting, Wi-Fi, gear, clock) over a paged 4x2 grid of square tiles, a settings sheet, and
+ * the wake intro. Laid out in 1920x1080 design pixels scaled to the screen. Focus is Vox's own state (Grid), not
+ * Android's view focus: the D-pad rules are the spec's, and the focused thing grows and darkens.
  */
 public class MainActivity extends Activity {
     private static final String TAG = "Vox";
-    private static final long PAGE_FADE_MS = 320;
-    private static final int MAX_CONFIG_BYTES = 64 * 1024;
+    private static final long PAGE_FADE_MS = 320, HOLD_MS = 500, RESUME_FADE_MS = 300;
+    private static final long LIFT_MS = 550, SETTLE_MS = 400, GLIDE_MS = 500, SHEET_MS = 400;
+    private static final long LIVE_PULSE_MS = 1200, BLINK_MS = 530, INTRO_SKIP_FADE_MS = 250;
+    /** A cold start this soon after boot is the TV turning on, so it gets the wake intro too. */
+    private static final long BOOT_INTRO_WINDOW_MS = 5 * 60_000;
+    /** SCREEN_ON and Home's onStart arrive in either order; this close together, Home is what the screen woke into. */
+    private static final long WAKE_WINDOW_MS = 1500;
     private static final float CHIP_ICON_REST_ALPHA = 0.55f, CHIP_ICON_FOCUS_SCALE = 1.25f;
+    private static final float LIFT_SCALE = 1.03f, LIFT_TILT = -2f, STEP_BACK_SCALE = 0.97f, STEP_BACK_ALPHA = 0.4f;
     private static final String STATE_PAGE = "page", STATE_INDEX = "index", STATE_HEADER = "header",
             STATE_CHIP = "chip", STATE_KEY = "key";
+    /** Debug only (setprop log.tag.Vox DEBUG): am start -n tv.voxclean.launcher/.MainActivity --ez vox.intro true */
+    private static final String EXTRA_INTRO = "vox.intro";
+    private static final int SHEET_NETWORK = 0, SHEET_LIBRARY = 1, SHEET_HOME = 2, SHEET_ANDROID = 3,
+            SHEET_RESTART = 4, SHEET_ITEMS = 5;
+    /** The settle curve, cubic-bezier(.32,.72,0,1): tiles making room, the page dots, the sheet. */
+    private static final PathInterpolator SETTLE = new PathInterpolator(.32f, .72f, 0f, 1f);
+    private final Object introToken = new Object();
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
     private float scale;
-    private Typeface font;
-    private int ink, muted, tileColor, dotColor;
+    private Typeface font, light;
+    private int ink, muted, tileColor, dotColor, liveColor;
     private VoxConfig config;
+    private Store orderStore, libraryStore;
+    private SharedPreferences prefs;
 
     private List<Tiles.Tile> tiles = Collections.emptyList();
     /** The leanback activity behind each tile key, and the first one per package (the Live tile borrows YouTube TV's). */
@@ -90,14 +113,53 @@ public class MainActivity extends Activity {
     private int packageSequence;
     private String greetingSlot;
 
-    private TextView greeting, wifiText, clock, pageLabel;
-    private View wifiChip, gearChip;
+    /** The order before a move began (null when no tile is lifted); Back puts it back. */
+    private List<Tiles.Tile> moveStart;
+    private String movingKey;
+    /** OK was pressed again after the lift, so its release drops (the lifting press's own release does not). */
+    private boolean dropArmed;
+    private final Runnable lift = this::startMove;
+
+    private boolean sheetOpen;
+    private int sheetFocus;
+
+    private boolean introRunning, introBootPending;
+    private long screenOnAt = -WAKE_WINDOW_MS * 2;
+    /** A key that skipped the intro: its release is swallowed too. */
+    private int swallowUp = -1;
+    private boolean cursorOn;
+    private final Runnable blink = new Runnable() {
+        @Override
+        public void run() {
+            cursorOn = !cursorOn;
+            introCursor.setVisibility(cursorOn ? View.VISIBLE : View.INVISIBLE);
+            handler.postAtTime(this, introToken, SystemClock.uptimeMillis() + BLINK_MS);
+        }
+    };
+
+    private TextView greeting, wifiText, clock, pageLabel, hint;
+    private View wifiChip, gearChip, footer;
     private ImageView wifiIcon, gearIcon;
     private FrameLayout gridLayer;
+    /** Each slot: the outer cell glides (FLIP); the card inside lifts, steps back and casts the shadow. */
     private final FrameLayout[] cells = new FrameLayout[Grid.PER_PAGE];
+    private final FrameLayout[] cards = new FrameLayout[Grid.PER_PAGE];
     private final ImageView[] cellArt = new ImageView[Grid.PER_PAGE];
     private final TextView[] cellName = new TextView[Grid.PER_PAGE];
     private LinearLayout dots;
+    private final List<View> dotViews = new ArrayList<>();
+    private ObjectAnimator livePulse;
+
+    private View scrim;
+    private LinearLayout sheet;
+    private final View[] sheetItems = new View[SHEET_ITEMS];
+    private final ImageView[] sheetIcons = new ImageView[SHEET_ITEMS];
+    private final List<TextView> sheetTexts = new ArrayList<>();
+    private TextView netName, netSignal, netIp, netWifi;
+
+    private FrameLayout intro;
+    private TextView introText;
+    private View introCursor;
 
     private final BroadcastReceiver packageReceiver = new BroadcastReceiver() {
         @Override
@@ -105,6 +167,8 @@ public class MainActivity extends Activity {
             // An update sends REMOVED then ADDED: keep the tile until the new APK is in.
             if (Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())
                     && intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
+            // A lifted tile is put back: the order it was moving through just changed.
+            cancelMove(false);
             // On screen: rebuild now. Hidden: mark stale, so a run of app updates costs one rebuild in onResume.
             if (started) loadTiles();
             else stale = true;
@@ -115,6 +179,19 @@ public class MainActivity extends Activity {
         @Override
         public void onReceive(Context context, Intent intent) {
             updateClock();
+        }
+    };
+
+    /** The wake intro: ready (white) as the screen goes off, played when the screen comes back on Home. */
+    private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
+                if (started) coverForIntro();
+                return;
+            }
+            screenOnAt = SystemClock.uptimeMillis();
+            if (started) playIntro();
         }
     };
 
@@ -142,15 +219,22 @@ public class MainActivity extends Activity {
         DisplayMetrics dm = getResources().getDisplayMetrics();
         scale = dm.widthPixels / 1920f;
         font = getResources().getFont(R.font.plex_mono_regular);
+        light = getResources().getFont(R.font.plex_mono_light);
         ink = getColor(R.color.ink);
         muted = getColor(R.color.muted);
         tileColor = getColor(R.color.tile);
         dotColor = getColor(R.color.dot);
-        config = readConfig();
+        liveColor = getColor(R.color.live);
+        config = VoxConfig.load(this);
+        orderStore = new Store(this, Store.ORDER);
+        libraryStore = new Store(this, Store.LIBRARY);
+        prefs = getSharedPreferences(LastApp.PREFS, MODE_PRIVATE);
         if (state != null) {
             focus = new Grid(state.getInt(STATE_PAGE), state.getInt(STATE_INDEX), state.getBoolean(STATE_HEADER),
                     state.getInt(STATE_CHIP, Grid.CHIP_SETTINGS));
             focusedKey = state.getString(STATE_KEY);
+        } else {
+            introBootPending = SystemClock.elapsedRealtime() < BOOT_INTRO_WINDOW_MS;
         }
         setContentView(buildLayout());
 
@@ -161,6 +245,9 @@ public class MainActivity extends Activity {
         packages.addDataScheme("package");
         // For the activity's whole life: an install while an app is in front must still mark the tiles stale.
         register(packageReceiver, packages);
+        IntentFilter screen = new IntentFilter(Intent.ACTION_SCREEN_ON);
+        screen.addAction(Intent.ACTION_SCREEN_OFF);
+        register(screenReceiver, screen);
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         if (cm != null) cm.registerDefaultNetworkCallback(networkCallback);
         loadTiles();
@@ -171,29 +258,6 @@ public class MainActivity extends Activity {
             registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
             registerReceiver(receiver, filter);
-        }
-    }
-
-    /** config.json from the app's external files directory, where home/home-config.sh pushes it. */
-    private VoxConfig readConfig() {
-        File dir = getExternalFilesDir(null);
-        File file = dir != null ? new File(dir, VoxConfig.FILE_NAME) : null;
-        if (file == null || !file.exists()) return VoxConfig.parse(null);
-        try (InputStream in = new FileInputStream(file)) {
-            byte[] buf = new byte[MAX_CONFIG_BYTES + 1];
-            int n = 0, r;
-            while (n < buf.length && (r = in.read(buf, n, buf.length - n)) > 0) n += r;
-            if (n > MAX_CONFIG_BYTES) {
-                Log.w(TAG, "config.json is over " + MAX_CONFIG_BYTES + " bytes; ignored");
-                return VoxConfig.parse(null);
-            }
-            VoxConfig c = VoxConfig.parse(new String(buf, 0, n, StandardCharsets.UTF_8));
-            Log.i(TAG, c.fileIgnored ? "config.json does not parse; ignored as a whole"
-                    : "config.json read: focus_scale " + c.focusScale + ", live_uri " + c.liveUri);
-            return c;
-        } catch (IOException | SecurityException e) {
-            Log.w(TAG, "config.json at " + file + " could not be read; using defaults", e);
-            return VoxConfig.parse(null);
         }
     }
 
@@ -224,6 +288,7 @@ public class MainActivity extends Activity {
     private View buildLayout() {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(getColor(R.color.page));
+        root.setClipChildren(false);
 
         // Header: top 64, height 56, between the grid's edges (185 px in from each side).
         greeting = text(22, 0.08f, ink);
@@ -253,13 +318,17 @@ public class MainActivity extends Activity {
         s.topMargin = px(64);
         root.addView(status, s);
 
-        // Grid: 4x2 squares of 380 px with 10 px gaps, top-left at (185, 178).
+        // Grid: 4x2 squares of 380 px with 10 px gaps, top-left at (185, 178). Nothing clips, so a lifted tile's
+        // shadow and a gliding tile draw past their slots.
         gridLayer = new FrameLayout(this);
+        gridLayer.setClipChildren(false);
         for (int i = 0; i < Grid.PER_PAGE; i++) {
             FrameLayout cell = new FrameLayout(this);
-            cell.setBackgroundColor(tileColor);
+            cell.setClipChildren(false);
+            FrameLayout card = new FrameLayout(this);
+            card.setBackgroundColor(tileColor);
             ImageView image = new ImageView(this);
-            cell.addView(image, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            card.addView(image, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT));
             TextView name = text(16, 0.12f, muted);
             name.setMaxWidth(px(332));
@@ -267,12 +336,15 @@ public class MainActivity extends Activity {
                     Gravity.TOP | Gravity.END);
             n.topMargin = px(20);
             n.rightMargin = px(24);
-            cell.addView(name, n);
+            card.addView(name, n);
+            cell.addView(card, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
             FrameLayout.LayoutParams c = at(px(380), px(380), Gravity.TOP | Gravity.START);
-            c.leftMargin = px((i % Grid.COLS) * 390);
-            c.topMargin = px((i / Grid.COLS) * 390);
+            c.leftMargin = slotX(i);
+            c.topMargin = slotY(i);
             gridLayer.addView(cell, c);
             cells[i] = cell;
+            cards[i] = card;
             cellArt[i] = image;
             cellName[i] = name;
         }
@@ -281,21 +353,40 @@ public class MainActivity extends Activity {
         gl.topMargin = px(178);
         root.addView(gridLayer, gl);
 
-        // Footer: page dots bottom left, PAGE n / m bottom right.
-        LinearLayout footer = new LinearLayout(this);
-        footer.setGravity(Gravity.CENTER_VERTICAL);
+        // Footer: page dots bottom left, PAGE n / m bottom right. During a move the hint takes its place.
+        LinearLayout bar = new LinearLayout(this);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
         dots = new LinearLayout(this);
         dots.setGravity(Gravity.CENTER_VERTICAL);
-        footer.addView(dots, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        bar.addView(dots, new LinearLayout.LayoutParams(0, px(12), 1f));
         pageLabel = text(16, 0.12f, muted);
-        footer.addView(pageLabel);
+        bar.addView(pageLabel);
         FrameLayout.LayoutParams f = at(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM);
         f.leftMargin = px(185);
         f.rightMargin = px(185);
         f.bottomMargin = px(56);
-        root.addView(footer, f);
+        root.addView(bar, f);
+        footer = bar;
+        hint = text(16, 0.12f, ink);
+        hint.setText(R.string.moving_hint);
+        hint.setAlpha(0f);
+        FrameLayout.LayoutParams h = at(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        h.bottomMargin = px(56);
+        root.addView(hint, h);
+
+        buildSheet(root);
+        buildIntro(root);
         return root;
+    }
+
+    private int slotX(int i) {
+        return px((i % Grid.COLS) * 390);
+    }
+
+    private int slotY(int i) {
+        return px((i / Grid.COLS) * 390);
     }
 
     /** A header item: a 28 px Carbon icon, optionally followed by a label. */
@@ -319,6 +410,117 @@ public class MainActivity extends Activity {
         return chip;
     }
 
+    /** The settings sheet: 640 px from the right over Home under a white scrim, both above every tile layer. */
+    private void buildSheet(FrameLayout root) {
+        scrim = new View(this);
+        scrim.setBackgroundColor(Color.argb(184, 255, 255, 255));
+        scrim.setVisibility(View.GONE);
+        scrim.setTranslationZ(px(40));
+        root.addView(scrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setBackgroundColor(getColor(R.color.page));
+        sheet.setPadding(px(72), px(64), px(72), px(64));
+        sheet.setClipChildren(false);
+        sheet.setClipToPadding(false);
+        sheet.setElevation(px(24));
+        sheet.setTranslationZ(px(40));
+        sheet.setVisibility(View.GONE);
+        TextView title = text(22, 0.08f, ink);
+        title.setText(R.string.settings_title);
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        tl.bottomMargin = px(48);
+        sheet.addView(title, tl);
+
+        // Network card: name, signal, IP, and the way to Android's Wi-Fi screen (apps cannot join networks).
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackgroundColor(tileColor);
+        card.setPadding(px(32), px(28), px(32), px(28));
+        netName = text(22, 0, muted);
+        netSignal = text(18, 0.04f, muted);
+        netIp = text(18, 0.04f, muted);
+        netWifi = text(18, 0.04f, muted);
+        netWifi.setText("WI-FI NETWORKS → ANDROID");
+        for (TextView t : new TextView[]{netName, netSignal, netIp, netWifi}) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = px(t == netName ? 12 : 8);
+            card.addView(t, lp);
+            sheetTexts.add(t);
+        }
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        cl.bottomMargin = px(36);
+        sheet.addView(card, cl);
+        sheetItems[SHEET_NETWORK] = card;
+
+        sheetRow(SHEET_LIBRARY, R.drawable.ic_apps, "APP LIBRARY", "OPEN");
+        sheetRow(SHEET_HOME, R.drawable.ic_home, "CHOOSE DEFAULT HOME", "ANDROID");
+        sheetRow(SHEET_ANDROID, R.drawable.ic_settings, "ANDROID SETTINGS", "ANDROID");
+        sheetRow(SHEET_RESTART, R.drawable.ic_restart, "RESTART", "ANDROID");
+
+        FrameLayout.LayoutParams sl = at(px(640), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END);
+        root.addView(sheet, sl);
+    }
+
+    private void sheetRow(int index, int icon, String label, String go) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(px(8), px(22), px(8), px(22));
+        row.setClipChildren(false);
+        row.setClipToPadding(false);
+        ImageView i = new ImageView(this);
+        i.setImageResource(icon);
+        i.setAlpha(CHIP_ICON_REST_ALPHA);
+        row.addView(i, new LinearLayout.LayoutParams(px(28), px(28)));
+        TextView t = text(22, 0.04f, muted);
+        t.setText(label);
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tl.setMarginStart(px(22));
+        row.addView(t, tl);
+        TextView g = text(16, 0.1f, muted);
+        g.setText(go);
+        row.addView(g);
+        sheet.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        View rule = new View(this);
+        rule.setBackgroundColor(getColor(R.color.rule));
+        sheet.addView(rule, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, px(1))));
+        sheetItems[index] = row;
+        sheetIcons[index] = i;
+        sheetTexts.add(t);
+        sheetTexts.add(g);
+    }
+
+    /** The wake intro: a white page over everything, the greeting typed big at the header's left edge. */
+    private void buildIntro(FrameLayout root) {
+        intro = new FrameLayout(this);
+        intro.setBackgroundColor(getColor(R.color.page));
+        intro.setTranslationZ(px(80));
+        intro.setVisibility(View.GONE);
+        LinearLayout line = new LinearLayout(this);
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        introText = text(64, 0.04f, ink);
+        introText.setTypeface(light);
+        line.addView(introText);
+        introCursor = new View(this);
+        introCursor.setBackgroundColor(ink);
+        // A full-height block: 1.2 em tall, 0.55 em wide, of the 64 px line.
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(px(64 * 0.55f), px(64 * 1.2f));
+        cl.setMarginStart(px(64 * 0.06f));
+        line.addView(introCursor, cl);
+        FrameLayout.LayoutParams ll = at(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER_VERTICAL | Gravity.START);
+        ll.leftMargin = px(185);
+        intro.addView(line, ll);
+        root.addView(intro, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
     // ---- tiles ----------------------------------------------------------------------------------
 
     /** Asks PackageManager for the TV apps again and redraws the page, keeping focus on the same app. */
@@ -337,7 +539,9 @@ public class MainActivity extends Activity {
             activities.put(t.key, ri);
             if (!firstByPackage.containsKey(ai.packageName)) firstByPackage.put(ai.packageName, ri);
         }
-        tiles = Tiles.arrange(rows, config.hiddenApps);
+        // The Library's choices on top of the starting hidden set, then the owner's saved order.
+        List<Tiles.Tile> arranged = Tiles.arrange(rows, HiddenApps.parse(libraryStore.read()).apply(config.hiddenApps));
+        tiles = Reorder.apply(arranged, orderStore.read());
         art.clear();
         packageSequence = changedSince(packageSequence).sequence;
         int pos = focusedKey != null ? Tiles.indexOf(tiles, focusedKey) : -1;
@@ -370,51 +574,72 @@ public class MainActivity extends Activity {
         if (!focus.header && pos < tiles.size()) focusedKey = tiles.get(pos).key;
     }
 
-    /** Binds the current page's tiles, the dots and the page label, with focus drawn without motion. */
+    /** Binds the current page's tiles, the dots and the page label, with focus and move state drawn without motion. */
     private void render() {
         for (int i = 0; i < Grid.PER_PAGE; i++) {
             int pos = focus.page * Grid.PER_PAGE + i;
             bindCell(i, pos < tiles.size() ? tiles.get(pos) : null);
         }
         int pages = Grid.pages(tiles.size());
-        dots.removeAllViews();
-        for (int p = 0; p < pages; p++) {
-            boolean on = p == focus.page;
-            View dot = new View(this);
-            GradientDrawable shape = new GradientDrawable();
-            shape.setCornerRadius(px(6));
-            shape.setColor(on ? ink : dotColor);
-            dot.setBackground(shape);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(px(on ? 40 : 12), px(12));
-            lp.setMarginEnd(px(10));
-            dots.addView(dot, lp);
-        }
+        if (dotViews.size() != pages) buildDots(pages);
+        paintDots(false);
         pageLabel.setText(getString(R.string.page_label, focus.page + 1, pages));
         paintFocus(false);
+        paintMove(false);
     }
 
     private void bindCell(int i, Tiles.Tile tile) {
+        cells[i].animate().cancel();
+        cells[i].setTranslationX(0);
+        cells[i].setTranslationY(0);
         if (tile == null) {
             cells[i].setVisibility(View.INVISIBLE);
             cellArt[i].setImageDrawable(null);
+            cellName[i].setTag(null);
             return;
         }
         cells[i].setVisibility(View.VISIBLE);
         cellName[i].setText(tile.label);
+        cellName[i].setTag(tile.key);
         Drawable d = artFor(tile);
         ImageView image = cellArt[i];
         if (Voxel.forTile(tile) != 0) {
-            // The voxel image is the tile: full bleed, its background is the tile's grey.
+            // The voxel image is the tile: full bleed, its background is the tile's colour.
             image.setScaleType(ImageView.ScaleType.FIT_XY);
             image.setPadding(0, 0, 0, 0);
         } else {
-            // The app's own icon centred on the grey tile; a 16:9 banner gets a wider box.
+            // The app's own icon centred on the tile; a 16:9 banner gets a wider box.
             boolean banner = d != null && d.getIntrinsicWidth() >= d.getIntrinsicHeight() * 1.4f;
             int inset = px(banner ? 62 : 110);
             image.setScaleType(ImageView.ScaleType.FIT_CENTER);
             image.setPadding(inset, inset, inset, inset);
         }
         image.setImageDrawable(d);
+        if (tile.isLive()) {
+            pulseLive(cellName[i]);
+        } else if (livePulse != null && livePulse.getTarget() == cellName[i]) {
+            stopLivePulse();
+        }
+    }
+
+    /** The Live label is red, focused or not, and pulses slowly like an on-air light while Home is on screen. */
+    private void pulseLive(TextView name) {
+        Motion.textColor(name, liveColor, false);
+        if (livePulse != null && livePulse.getTarget() == name) return;
+        stopLivePulse();
+        livePulse = ObjectAnimator.ofFloat(name, View.ALPHA, 1f, 0.2f).setDuration(LIVE_PULSE_MS);
+        livePulse.setInterpolator(new AccelerateDecelerateInterpolator());
+        livePulse.setRepeatCount(ValueAnimator.INFINITE);
+        livePulse.setRepeatMode(ValueAnimator.REVERSE);
+        livePulse.start();
+        if (!started) livePulse.pause();
+    }
+
+    private void stopLivePulse() {
+        if (livePulse == null) return;
+        livePulse.cancel();
+        ((View) livePulse.getTarget()).setAlpha(1f);
+        livePulse = null;
     }
 
     private Drawable artFor(Tiles.Tile tile) {
@@ -447,12 +672,12 @@ public class MainActivity extends Activity {
         return ri.loadIcon(pm);
     }
 
-    /** The focused tile or header item grows and darkens; everything else rests. */
+    /** The focused tile or header item grows and darkens; everything else rests. The Live label stays red. */
     private void paintFocus(boolean animate) {
         for (int i = 0; i < Grid.PER_PAGE; i++) {
             boolean on = !focus.header && i == focus.index;
             Motion.scale(cellArt[i], on ? config.focusScale : VoxConfig.REST_SCALE, animate);
-            Motion.textColor(cellName[i], on ? ink : muted, animate);
+            if (!Tiles.LIVE_KEY.equals(cellName[i].getTag())) Motion.textColor(cellName[i], on ? ink : muted, animate);
         }
         paintChip(wifiIcon, wifiText, focus.header && focus.chip == Grid.CHIP_WIFI, animate);
         paintChip(gearIcon, null, focus.header && focus.chip == Grid.CHIP_SETTINGS, animate);
@@ -464,28 +689,126 @@ public class MainActivity extends Activity {
         if (label != null) Motion.textColor(label, on ? ink : muted, animate);
     }
 
+    // ---- page dots ------------------------------------------------------------------------------
+
+    /** Only when the number of pages changes; a page turn animates the dots that are there. */
+    private void buildDots(int pages) {
+        dots.removeAllViews();
+        dotViews.clear();
+        for (int p = 0; p < pages; p++) {
+            View dot = new View(this);
+            GradientDrawable shape = new GradientDrawable();
+            shape.setCornerRadius(px(6));
+            shape.setColor(dotColor);
+            dot.setBackground(shape);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(px(12), px(12));
+            lp.setMarginEnd(px(10));
+            dots.addView(dot, lp);
+            dotViews.add(dot);
+        }
+    }
+
+    /** The active pill (40 px, ink) glides to the page's dot: the old one shrinks to 12 px as the new one grows. */
+    private void paintDots(boolean animate) {
+        for (int p = 0; p < dotViews.size(); p++) {
+            View dot = dotViews.get(p);
+            boolean on = p == focus.page;
+            int fromW = dot.getLayoutParams().width, toW = px(on ? 40 : 12);
+            int toColor = on ? ink : dotColor;
+            ValueAnimator running = (ValueAnimator) dot.getTag(R.id.color_anim);
+            if (running != null) running.cancel();
+            if (!animate || fromW == toW) {
+                setDot(dot, toW, toColor);
+                continue;
+            }
+            int fromColor = on ? dotColor : ink;
+            ValueAnimator a = ValueAnimator.ofFloat(0f, 1f).setDuration(PAGE_FADE_MS);
+            a.setInterpolator(SETTLE);
+            a.addUpdateListener(v -> {
+                float t = (float) v.getAnimatedValue();
+                setDot(dot, Math.round(fromW + (toW - fromW) * t), blend(fromColor, toColor, t));
+            });
+            dot.setTag(R.id.color_anim, a);
+            a.start();
+        }
+    }
+
+    private static void setDot(View dot, int width, int color) {
+        ((GradientDrawable) dot.getBackground()).setColor(color);
+        ViewGroup.LayoutParams lp = dot.getLayoutParams();
+        if (lp.width != width) {
+            lp.width = width;
+            dot.setLayoutParams(lp);
+        }
+    }
+
+    private static int blend(int from, int to, float t) {
+        return Color.argb(
+                Math.round(Color.alpha(from) + (Color.alpha(to) - Color.alpha(from)) * t),
+                Math.round(Color.red(from) + (Color.red(to) - Color.red(from)) * t),
+                Math.round(Color.green(from) + (Color.green(to) - Color.green(from)) * t),
+                Math.round(Color.blue(from) + (Color.blue(to) - Color.blue(from)) * t));
+    }
+
     // ---- keys -----------------------------------------------------------------------------------
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (introRunning) {
+            // Any key skips the intro; the key itself does nothing else.
+            if (event.getRepeatCount() == 0) {
+                swallowUp = keyCode;
+                finishIntro(INTRO_SKIP_FADE_MS);
+            }
+            return true;
+        }
+        if (sheetOpen) return sheetKeyDown(keyCode, event);
+        boolean back = keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE;
         Grid.Key key = arrow(keyCode);
+        if (moveStart != null) {
+            if (key != null) {
+                if (!turning) carry(key);
+            } else if (isOk(keyCode)) {
+                if (event.getRepeatCount() == 0) dropArmed = true;
+            } else if (back) {
+                if (event.getRepeatCount() == 0) cancelMove(true);
+            } else {
+                return super.onKeyDown(keyCode, event);
+            }
+            return true;
+        }
         if (key != null) {
             if (!turning) moveFocus(key);
             return true;
         }
         if (isOk(keyCode)) {
-            if (event.getRepeatCount() == 0) okDown = true;
+            if (event.getRepeatCount() == 0) {
+                okDown = true;
+                // Hold OK on a tile to pick it up.
+                if (!focus.header && !turning && focus.position() < tiles.size()) handler.postDelayed(lift, HOLD_MS);
+            }
             return true;
         }
-        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) return true;   // Back on Home does nothing
+        if (back) return true;   // Back on Home does nothing
         return super.onKeyDown(keyCode, event);
     }
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == swallowUp) {
+            swallowUp = -1;
+            return true;
+        }
+        if (introRunning) return true;
+        if (sheetOpen) return sheetKeyUp(keyCode, event);
         if (isOk(keyCode)) {
-            // Acts on release, so a press that began in another app (or on the screen before) does nothing here.
-            if (okDown && !turning) activate();
+            handler.removeCallbacks(lift);
+            if (moveStart != null) {
+                if (dropArmed) dropMove();
+            } else if (okDown && !turning) {
+                // Acts on release, so a press that began in another app (or on the screen before) does nothing here.
+                activate();
+            }
             okDown = false;
             return true;
         }
@@ -514,6 +837,7 @@ public class MainActivity extends Activity {
     }
 
     private void moveFocus(Grid.Key key) {
+        handler.removeCallbacks(lift);
         Grid next = focus.move(key, tiles.size());
         if (debug()) Log.d(TAG, key + ": " + focus + " -> " + next);
         if (next.equals(focus)) return;
@@ -526,9 +850,14 @@ public class MainActivity extends Activity {
         paintFocus(true);
     }
 
-    /** Page turn: the grid fades out, the tiles swap, it fades back in. */
+    /** Page turn: the grid fades out, the tiles swap, it fades back in; the page dots glide meanwhile. */
     private void turnTo(Grid next) {
         turning = true;
+        Grid target = next.clamp(tiles.size());
+        int from = focus.page;
+        focus = new Grid(target.page, focus.index, focus.header, focus.chip);
+        paintDots(true);
+        focus = new Grid(from, focus.index, focus.header, focus.chip);
         gridLayer.animate().cancel();
         gridLayer.animate().alpha(0f).setDuration(PAGE_FADE_MS).withEndAction(() -> {
             // Clamped: apps removed during the fade may have shortened or dropped the target page.
@@ -541,8 +870,11 @@ public class MainActivity extends Activity {
 
     private void activate() {
         if (focus.header) {
-            String action = focus.chip == Grid.CHIP_WIFI ? Settings.ACTION_WIFI_SETTINGS : Settings.ACTION_SETTINGS;
-            open(new Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "SETTINGS");
+            if (focus.chip == Grid.CHIP_WIFI) {
+                open(new Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "WI-FI", null);
+            } else {
+                openSheet();
+            }
             return;
         }
         int pos = focus.position();
@@ -558,17 +890,348 @@ public class MainActivity extends Activity {
                     .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
         }
-        open(intent, tile.label);
+        open(intent, tile.label, tile.pkg);
     }
 
-    private void open(Intent intent, String name) {
+    /**
+     * Opens with a cross-fade. pkg, when given, is kept as the last app Home opened: the screensaver's fallback
+     * when UsageStats has nothing.
+     */
+    private void open(Intent intent, String name, String pkg) {
         try {
-            startActivity(intent);
+            startActivity(intent,
+                    ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle());
+            if (pkg != null) prefs.edit().putString(LastApp.KEY_APP, pkg).apply();
         } catch (ActivityNotFoundException | SecurityException e) {
             Log.w(TAG, "could not open " + name + " with " + intent, e);
             Toast.makeText(this, getString(R.string.cant_open, name), Toast.LENGTH_SHORT).show();
         }
     }
+
+    // ---- reorder --------------------------------------------------------------------------------
+
+    /** Hold OK: the tile lifts, the others step back, and the hint replaces the page footer. */
+    private void startMove() {
+        int pos = focus.position();
+        if (focus.header || pos >= tiles.size() || moveStart != null || sheetOpen) return;
+        okDown = false;   // the release of this press neither opens the app nor drops
+        dropArmed = false;
+        moveStart = new ArrayList<>(tiles);
+        movingKey = tiles.get(pos).key;
+        tiles = new ArrayList<>(tiles);
+        paintMove(true);
+        if (debug()) Log.d(TAG, "move start " + movingKey + " at " + pos);
+    }
+
+    /** Arrows carry the lifted tile by re-insertion; on the page the others glide from where they were (FLIP). */
+    private void carry(Grid.Key key) {
+        int from = focus.position();
+        int to = Reorder.target(from, key, tiles.size());
+        if (to < 0) return;
+        Map<String, Integer> before = slots();
+        Reorder.move(tiles, from, to);
+        Grid next = Grid.at(to, focus);
+        if (next.page != focus.page) {
+            turnTo(next);
+        } else {
+            focus = next;
+            rememberFocusedKey();
+            render();
+            glide(before);
+        }
+        if (debug()) Log.d(TAG, "carry " + key + ": " + from + " -> " + to);
+    }
+
+    /** Which slot each tile key sits in on this page. */
+    private Map<String, Integer> slots() {
+        Map<String, Integer> m = new HashMap<>();
+        for (int i = 0; i < Grid.PER_PAGE; i++) {
+            Object key = cellName[i].getTag();
+            if (key != null && cells[i].getVisibility() == View.VISIBLE) m.put((String) key, i);
+        }
+        return m;
+    }
+
+    /** FLIP: each moved tile starts at its old slot and travels home; the carried one on the carried spring. */
+    private void glide(Map<String, Integer> before) {
+        for (int j = 0; j < Grid.PER_PAGE; j++) {
+            Object key = cellName[j].getTag();
+            Integer was = key != null ? before.get(key) : null;
+            if (was == null || was == j) continue;
+            View cell = cells[j];
+            cell.setTranslationX(slotX(was) - slotX(j));
+            cell.setTranslationY(slotY(was) - slotY(j));
+            boolean carried = key.equals(movingKey);
+            cell.animate().translationX(0).translationY(0)
+                    .setDuration(carried ? LIFT_MS : GLIDE_MS)
+                    .setInterpolator(carried ? new OvershootInterpolator(1.2f) : SETTLE)
+                    .start();
+        }
+    }
+
+    /** OK: the lift eases off in place and the order is saved. */
+    private void dropMove() {
+        if (moveStart == null) return;
+        boolean changed = !Reorder.keys(moveStart).equals(Reorder.keys(tiles));
+        endMove();
+        if (changed && !orderStore.write(Reorder.keys(tiles))) {
+            Toast.makeText(this, R.string.cant_save, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Back (glide: true) puts the tile home; an app change or leaving Home puts it back without motion. */
+    private void cancelMove(boolean glide) {
+        if (moveStart == null) return;
+        String key = movingKey;
+        Map<String, Integer> before = slots();
+        tiles = moveStart;
+        endMove();
+        int pos = Tiles.indexOf(tiles, key);
+        if (pos < 0) {
+            render();
+            return;
+        }
+        Grid home = Grid.at(pos, focus);
+        if (glide && home.page != focus.page) {
+            turnTo(home);
+            return;
+        }
+        focus = home;
+        rememberFocusedKey();
+        render();
+        if (glide) glide(before);
+    }
+
+    private void endMove() {
+        moveStart = null;
+        dropArmed = false;
+        paintMove(true);
+        movingKey = null;
+    }
+
+    /** Lifted tile, stepped-back tiles and the hint, or all of them at rest. */
+    private void paintMove(boolean animate) {
+        boolean moving = moveStart != null;
+        for (int i = 0; i < Grid.PER_PAGE; i++) {
+            boolean carried = moving && movingKey != null && movingKey.equals(cellName[i].getTag());
+            FrameLayout card = cards[i];
+            float s = carried ? LIFT_SCALE : moving ? STEP_BACK_SCALE : 1f;
+            float a = moving && !carried ? STEP_BACK_ALPHA : 1f;
+            float y = carried ? -px(12) : 0f;
+            float z = carried ? px(24) : 0f;
+            cells[i].setTranslationZ(carried ? px(10) : 0f);
+            card.animate().cancel();
+            cellArt[i].animate().cancel();
+            if (animate) {
+                card.animate().scaleX(s).scaleY(s).alpha(a).translationY(y).translationZ(z)
+                        .setDuration(carried ? LIFT_MS : SETTLE_MS)
+                        .setInterpolator(carried ? new OvershootInterpolator(1.2f) : SETTLE).start();
+                cellArt[i].animate().rotation(carried ? LIFT_TILT : 0f).setDuration(Motion.FADE_MS).start();
+            } else {
+                card.setScaleX(s);
+                card.setScaleY(s);
+                card.setAlpha(a);
+                card.setTranslationY(y);
+                card.setTranslationZ(z);
+                cellArt[i].setRotation(carried ? LIFT_TILT : 0f);
+            }
+        }
+        float footerAlpha = moving ? 0f : 1f, hintAlpha = moving ? 1f : 0f;
+        if (animate) {
+            footer.animate().alpha(footerAlpha).setDuration(250).start();
+            hint.animate().alpha(hintAlpha).setDuration(250).start();
+        } else {
+            footer.setAlpha(footerAlpha);
+            hint.setAlpha(hintAlpha);
+        }
+    }
+
+    // ---- settings sheet -------------------------------------------------------------------------
+
+    private void openSheet() {
+        updateNetwork();
+        sheetOpen = true;
+        sheetFocus = SHEET_LIBRARY;
+        paintSheet(false);
+        scrim.setVisibility(View.VISIBLE);
+        sheet.setVisibility(View.VISIBLE);
+        scrim.setAlpha(0f);
+        scrim.animate().alpha(1f).setDuration(SHEET_MS).setInterpolator(SETTLE).withEndAction(null).start();
+        sheet.setTranslationX(px(640));
+        sheet.animate().translationX(0).setDuration(SHEET_MS).setInterpolator(SETTLE).withEndAction(null).start();
+    }
+
+    private void closeSheet(boolean animate) {
+        if (!sheetOpen) return;
+        sheetOpen = false;
+        if (!animate) {
+            scrim.animate().cancel();
+            sheet.animate().cancel();
+            scrim.setVisibility(View.GONE);
+            sheet.setVisibility(View.GONE);
+            return;
+        }
+        scrim.animate().alpha(0f).setDuration(SHEET_MS).setInterpolator(SETTLE)
+                .withEndAction(() -> scrim.setVisibility(View.GONE)).start();
+        sheet.animate().translationX(px(640)).setDuration(SHEET_MS).setInterpolator(SETTLE)
+                .withEndAction(() -> sheet.setVisibility(View.GONE)).start();
+    }
+
+    private boolean sheetKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            int next = Math.max(0, Math.min(SHEET_ITEMS - 1,
+                    sheetFocus + (keyCode == KeyEvent.KEYCODE_DPAD_DOWN ? 1 : -1)));
+            if (next != sheetFocus) {
+                sheetFocus = next;
+                paintSheet(true);
+            }
+            return true;
+        }
+        if (isOk(keyCode)) {
+            if (event.getRepeatCount() == 0) okDown = true;
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            if (event.getRepeatCount() == 0) closeSheet(true);
+            return true;
+        }
+        return arrow(keyCode) != null || super.onKeyDown(keyCode, event);
+    }
+
+    private boolean sheetKeyUp(int keyCode, KeyEvent event) {
+        if (isOk(keyCode)) {
+            if (okDown) sheetActivate();
+            okDown = false;
+            return true;
+        }
+        return keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE || arrow(keyCode) != null
+                || super.onKeyUp(keyCode, event);
+    }
+
+    private void sheetActivate() {
+        switch (sheetFocus) {
+            case SHEET_NETWORK:
+                open(new Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "WI-FI", null);
+                break;
+            case SHEET_LIBRARY:
+                // Home re-reads the Library's choices when it comes back.
+                stale = true;
+                open(new Intent(this, LibraryActivity.class), "LIBRARY", null);
+                break;
+            case SHEET_HOME:
+                // The couch-side way back to upstream's launcher: the permission controller's Default home app.
+                open(new Intent(Settings.ACTION_HOME_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        "DEFAULT HOME", null);
+                break;
+            case SHEET_ANDROID:
+                open(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "SETTINGS", null);
+                break;
+            case SHEET_RESTART:
+                // An app cannot restart the TV itself; Android's System screen holds Restart.
+                open(new Intent(Settings.ACTION_DEVICE_INFO_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        "RESTART", null);
+                break;
+            default:
+                break;
+        }
+    }
+
+    /** Same focus rule as everywhere: the focused row's text darkens and its icon grows. */
+    private void paintSheet(boolean animate) {
+        for (TextView t : sheetTexts) Motion.textColor(t, muted, animate);
+        for (int i = 0; i < SHEET_ITEMS; i++) {
+            ImageView icon = sheetIcons[i];
+            if (icon == null) continue;
+            boolean on = i == sheetFocus;
+            Motion.scale(icon, on ? CHIP_ICON_FOCUS_SCALE : 1f, animate);
+            Motion.alpha(icon, on ? 1f : CHIP_ICON_REST_ALPHA, animate);
+        }
+        View item = sheetItems[sheetFocus];
+        if (item instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) item;
+            for (int c = 0; c < group.getChildCount(); c++) {
+                View child = group.getChildAt(c);
+                if (child instanceof TextView) Motion.textColor((TextView) child, ink, animate);
+            }
+        }
+    }
+
+    // ---- wake intro -----------------------------------------------------------------------------
+
+    /** The screen is going off on Home: go white now, so waking never flashes the grid before the intro. */
+    private void coverForIntro() {
+        handler.removeCallbacksAndMessages(introToken);
+        intro.animate().cancel();
+        intro.setAlpha(1f);
+        intro.setVisibility(View.VISIBLE);
+        introText.setText("");
+        introCursor.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * Types the greeting with beats (Typing), the cursor blinking while it waits and solid while it types; then the
+     * cursor goes, the line sits alone for a beat, and Home fades in. Any key skips it.
+     */
+    private void playIntro() {
+        if (introRunning) return;
+        introRunning = true;
+        closeSheet(false);
+        cancelMove(false);
+        handler.removeCallbacks(lift);
+        coverForIntro();
+        String line = greeting.getText().toString();
+        int[] times = Typing.schedule(line, random);
+        long t0 = SystemClock.uptimeMillis();
+        startBlink();
+        if (times.length > 0) at(t0, times[0] - 10, this::solidCursor);
+        for (int i = 0; i < times.length; i++) {
+            int n = i + 1;
+            at(t0, times[i], () -> introText.setText(line.substring(0, n)));
+        }
+        int typed = Typing.typed(times);
+        at(t0, typed + 40, this::startBlink);
+        at(t0, typed + Typing.BLINK_AFTER_MS, () -> {
+            handler.removeCallbacks(blink, introToken);
+            introCursor.setVisibility(View.INVISIBLE);
+        });
+        at(t0, typed + Typing.BLINK_AFTER_MS + Typing.BEAT_MS, () -> finishIntro(Typing.FADE_MS));
+        if (debug()) Log.d(TAG, "intro: " + line + " typed by " + typed + " ms");
+    }
+
+    private void at(long t0, long delay, Runnable r) {
+        handler.postAtTime(r, introToken, t0 + delay);
+    }
+
+    private void startBlink() {
+        handler.removeCallbacks(blink, introToken);
+        cursorOn = true;
+        introCursor.setVisibility(View.VISIBLE);
+        handler.postAtTime(blink, introToken, SystemClock.uptimeMillis() + BLINK_MS);
+    }
+
+    private void solidCursor() {
+        handler.removeCallbacks(blink, introToken);
+        introCursor.setVisibility(View.VISIBLE);
+    }
+
+    /** The line fades out over Home (Home is under the white page all along). */
+    private void finishIntro(long fadeMs) {
+        handler.removeCallbacksAndMessages(introToken);
+        introRunning = false;
+        intro.animate().cancel();
+        intro.animate().alpha(0f).setDuration(fadeMs).setInterpolator(SETTLE)
+                .withEndAction(() -> intro.setVisibility(View.GONE)).start();
+    }
+
+    /** Gone at once: an app came in front instead of Home. */
+    private void dropIntro() {
+        handler.removeCallbacksAndMessages(introToken);
+        introRunning = false;
+        intro.animate().cancel();
+        intro.setVisibility(View.GONE);
+    }
+
+    // ---- lifecycle ------------------------------------------------------------------------------
 
     /** Home pressed while Home is in front (singleTask): back to page 1 without re-creating the activity. */
     @Override
@@ -576,8 +1239,15 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (debug()) Log.d(TAG, "onNewIntent " + intent + " stopped=" + stopped + " focus " + focus);
+        if (debug() && intent.getBooleanExtra(EXTRA_INTRO, false)) {
+            playIntro();
+            return;
+        }
+        if (introRunning) finishIntro(INTRO_SKIP_FADE_MS);
         // From an app (Home was stopped) focus stays on the tile it was on; only Home on Home resets.
         if (stopped || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
+        closeSheet(true);
+        cancelMove(false);
         Grid first = Grid.first();
         if (turning) {
             gridLayer.animate().cancel();
@@ -593,8 +1263,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ---- lifecycle ------------------------------------------------------------------------------
-
     @Override
     protected void onStart() {
         super.onStart();
@@ -606,15 +1274,39 @@ public class MainActivity extends Activity {
         pickGreeting();
         updateClock();
         updateNetwork();
+        if (livePulse != null) livePulse.resume();
+        if (introBootPending || SystemClock.uptimeMillis() - screenOnAt < WAKE_WINDOW_MS) {
+            introBootPending = false;
+            playIntro();
+        } else if (!introRunning) {
+            // Covered for an intro as the screen went off, but the screen woke into an app.
+            dropIntro();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        boolean fromApp = stopped;
         // Cleared here, not in onStart: Home pressed in an app delivers onNewIntent after onStart (Android 14).
         stopped = false;
+        prefs.edit().putBoolean(LastApp.KEY_HOME_FRONT, true).apply();
         // A package change whose broadcast never arrived still shows up in PackageManager's change record.
         if (stale || changedSince(packageSequence).any) loadTiles();
+        // Back from an app: the grid fades in, matching the system's return animation.
+        if (fromApp && !introRunning && !turning) {
+            gridLayer.setAlpha(0f);
+            gridLayer.animate().alpha(1f).setDuration(RESUME_FADE_MS).start();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        handler.removeCallbacks(lift);
+        prefs.edit().putBoolean(LastApp.KEY_HOME_FRONT, false).apply();
+        // A move ends when Home leaves the screen: the tile goes back where it was.
+        cancelMove(false);
     }
 
     @Override
@@ -624,14 +1316,28 @@ public class MainActivity extends Activity {
         stopped = true;
         okDown = false;
         unregisterReceiver(timeReceiver);
+        if (livePulse != null) livePulse.pause();
+        closeSheet(false);
+        // Screen going off: keep the white cover for the wake. Otherwise an app came in front.
+        PowerManager power = getSystemService(PowerManager.class);
+        if (power == null || power.isInteractive()) dropIntro();
+        else if (introRunning) coverForIntroStopped();
+    }
+
+    /** Stopped mid-intro by the screen going off: back to the plain white cover, ready for the next wake. */
+    private void coverForIntroStopped() {
+        introRunning = false;
+        coverForIntro();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
         unregisterReceiver(packageReceiver);
+        unregisterReceiver(screenReceiver);
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         if (cm != null) cm.unregisterNetworkCallback(networkCallback);
+        stopLivePulse();
         handler.removeCallbacksAndMessages(null);
     }
 
@@ -685,7 +1391,8 @@ public class MainActivity extends Activity {
     @SuppressWarnings("deprecation")   // getConnectionInfo still answers for apps holding ACCESS_FINE_LOCATION
     private void updateNetwork() {
         boolean online = false, ethernet = false, wifi = false;
-        String ssid = null;
+        String ssid = null, ip = null;
+        int rssi = Integer.MIN_VALUE;
         try {
             ConnectivityManager cm = getSystemService(ConnectivityManager.class);
             for (Network net : cm != null ? cm.getAllNetworks() : new Network[0]) {
@@ -695,15 +1402,39 @@ public class MainActivity extends Activity {
                 online = true;
                 if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) ethernet = true;
                 if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) wifi = true;
+                if (ip == null) ip = ipv4(cm.getLinkProperties(net));
             }
             if (wifi) {
                 WifiManager wm = getApplicationContext().getSystemService(WifiManager.class);
                 WifiInfo info = wm != null ? wm.getConnectionInfo() : null;
                 ssid = info != null ? info.getSSID() : null;
+                if (info != null) rssi = info.getRssi();
             }
         } catch (SecurityException e) {
             Log.w(TAG, "network state not readable", e);
         }
-        wifiText.setText(NetworkLabel.of(online, ethernet, wifi, ssid));
+        String label = NetworkLabel.of(online, ethernet, wifi, ssid);
+        wifiText.setText(label);
+        netName.setText(label);
+        netSignal.setText("SIGNAL  " + (wifi && !ethernet && rssi != Integer.MIN_VALUE ? signal(rssi) : "—"));
+        netIp.setText("IP  " + (ip != null ? ip : "—"));
+    }
+
+    private static String ipv4(LinkProperties lp) {
+        if (lp == null) return null;
+        for (LinkAddress a : lp.getLinkAddresses()) {
+            if (a.getAddress() instanceof Inet4Address) return a.getAddress().getHostAddress();
+        }
+        return null;
+    }
+
+    @SuppressWarnings("deprecation")   // calculateSignalLevel(int, int): the instance form needs API 30
+    private static String signal(int rssi) {
+        switch (WifiManager.calculateSignalLevel(rssi, 4)) {
+            case 3: return "EXCELLENT";
+            case 2: return "GOOD";
+            case 1: return "FAIR";
+            default: return "WEAK";
+        }
     }
 }

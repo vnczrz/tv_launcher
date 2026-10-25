@@ -1,5 +1,13 @@
 package tv.voxclean.launcher;
 
+import android.content.Context;
+import android.util.Log;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -15,13 +23,17 @@ import java.util.Set;
  */
 final class VoxConfig {
     static final String FILE_NAME = "config.json";
-    static final float REST_SCALE = 0.90f;
+    static final float REST_SCALE = 0.72f;
+    /** focus_scale's ceiling: the focused image stays inside its tile. */
+    static final float MAX_FOCUS_SCALE = 1.0f;
+    private static final int MAX_CONFIG_BYTES = 64 * 1024;
+    private static final String TAG = "Vox";
     static final String DEFAULT_LIVE_URI = "https://tv.youtube.com/live";
-    /** Started hidden; config's hidden_apps adds to these. The Library (lane 4) will let the owner change them. */
+    /** Started hidden; config's hidden_apps adds to these, and the Library's choices (HiddenApps) go on top. */
     static final Set<String> DEFAULT_HIDDEN = Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(
             "com.android.settings", "com.android.tv.settings", "com.gathin.tvhome")));
 
-    float focusScale = 0.954f;
+    float focusScale = 0.95f;
     /** Per time slot (Greeting.MORNING ...); a slot not given keeps the built-in lines. */
     final Map<String, List<String>> greetings = new HashMap<>();
     List<String> appLines = Collections.emptyList();
@@ -31,6 +43,29 @@ final class VoxConfig {
     float saverTrackingEm = 0.8f;
     /** The text was given but is not a JSON object, so every value is the default. */
     boolean fileIgnored;
+
+    /** config.json from the app's external files directory, where home/home-config.sh pushes it. */
+    static VoxConfig load(Context context) {
+        File dir = context.getExternalFilesDir(null);
+        File file = dir != null ? new File(dir, FILE_NAME) : null;
+        if (file == null || !file.exists()) return parse(null);
+        try (InputStream in = new FileInputStream(file)) {
+            byte[] buf = new byte[MAX_CONFIG_BYTES + 1];
+            int n = 0, r;
+            while (n < buf.length && (r = in.read(buf, n, buf.length - n)) > 0) n += r;
+            if (n > MAX_CONFIG_BYTES) {
+                Log.w(TAG, "config.json is over " + MAX_CONFIG_BYTES + " bytes; ignored");
+                return parse(null);
+            }
+            VoxConfig c = parse(new String(buf, 0, n, StandardCharsets.UTF_8));
+            Log.i(TAG, c.fileIgnored ? "config.json does not parse; ignored as a whole"
+                    : "config.json read: focus_scale " + c.focusScale + ", live_uri " + c.liveUri);
+            return c;
+        } catch (IOException | SecurityException e) {
+            Log.w(TAG, "config.json at " + file + " could not be read; using defaults", e);
+            return parse(null);
+        }
+    }
 
     /** @param text the file's contents, or null for no file */
     static VoxConfig parse(String text) {
@@ -48,7 +83,7 @@ final class VoxConfig {
             return c;
         }
         Map<?, ?> m = (Map<?, ?>) root;
-        c.focusScale = number(m.get("focus_scale"), REST_SCALE, 1.2f, c.focusScale, false);
+        c.focusScale = number(m.get("focus_scale"), REST_SCALE, MAX_FOCUS_SCALE, c.focusScale, false);
         c.saverEntrySpeed = number(m.get("saver_entry_speed"), 0f, 5f, c.saverEntrySpeed, false);
         c.saverTrackingEm = number(m.get("saver_tracking_em"), 0f, 2f, c.saverTrackingEm, true);
         Object live = m.get("live_uri");

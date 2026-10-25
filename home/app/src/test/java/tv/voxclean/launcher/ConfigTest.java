@@ -13,7 +13,7 @@ import org.junit.Test;
 
 public class ConfigTest {
     private static void assertDefaults(VoxConfig c) {
-        assertEquals(0.954f, c.focusScale, 0f);
+        assertEquals(0.95f, c.focusScale, 0f);
         assertEquals(VoxConfig.DEFAULT_LIVE_URI, c.liveUri);
         assertEquals(VoxConfig.DEFAULT_HIDDEN, c.hiddenApps);
         assertTrue(c.greetings.isEmpty());
@@ -55,7 +55,7 @@ public class ConfigTest {
                 + " \"greetings\": {\"morning\": [], \"evening\": [\"Hi.\"], \"noon\": [\"x\"]},"
                 + " \"unknown_key\": true, \"saver_tracking_em\": 0.6}");
         assertFalse(c.fileIgnored);
-        assertEquals(0.954f, c.focusScale, 0f);
+        assertEquals(0.95f, c.focusScale, 0f);
         assertEquals(VoxConfig.DEFAULT_LIVE_URI, c.liveUri);
         assertEquals(VoxConfig.DEFAULT_HIDDEN, c.hiddenApps);
         assertTrue(c.appLines.isEmpty());
@@ -67,9 +67,11 @@ public class ConfigTest {
 
     @Test
     public void focusScaleMustGrowTheTile() {
-        assertEquals(0.954f, VoxConfig.parse("{\"focus_scale\": 0.9}").focusScale, 0f);
-        assertEquals(0.954f, VoxConfig.parse("{\"focus_scale\": 3}").focusScale, 0f);
-        assertEquals(0.97f, VoxConfig.parse("{\"focus_scale\": 0.97}").focusScale, 0f);
+        assertEquals(0.95f, VoxConfig.parse("{\"focus_scale\": 0.72}").focusScale, 0f);
+        assertEquals(0.73f, VoxConfig.parse("{\"focus_scale\": 0.73}").focusScale, 0f);
+        assertEquals(1.0f, VoxConfig.parse("{\"focus_scale\": 1.0}").focusScale, 0f);
+        assertEquals(0.95f, VoxConfig.parse("{\"focus_scale\": 1.01}").focusScale, 0f);
+        assertEquals(0.95f, VoxConfig.parse("{\"focus_scale\": 3}").focusScale, 0f);
     }
 
     @Test

@@ -4,7 +4,7 @@
 #   TV_HOST=<tv ip> home/home-config.sh --reset       remove it: every value back to the default
 # Keys (all optional; a bad value is ignored on its own, a file that does not parse is ignored as a whole):
 #   focus_scale, greetings {morning|afternoon|evening|late: [lines]}, app_lines, live_uri, hidden_apps,
-#   saver_entry_speed, saver_tracking_em.
+#   saver_entry_speed, saver_tracking_em, intro_delay_ms (0-5000: white page before the wake intro types).
 # The file goes to Vox's external files directory (/sdcard/Android/data/<pkg>/files), which the shell can write on
 # Android 14; there the copy belongs to Vox's uid and Vox reads it (Google TV 14). logcat -s Vox prints what it read.
 set -euo pipefail

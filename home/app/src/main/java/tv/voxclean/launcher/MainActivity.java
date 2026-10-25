@@ -123,7 +123,7 @@ public class MainActivity extends Activity {
     private boolean sheetOpen;
     private int sheetFocus;
 
-    private boolean introRunning, introBootPending;
+    private boolean introRunning, introBootPending, introAwaitingFocus;
     private long screenOnAt = -WAKE_WINDOW_MS * 2;
     /** A key that skipped the intro: its release is swallowed too. */
     private int swallowUp = -1;
@@ -905,7 +905,8 @@ public class MainActivity extends Activity {
         try {
             startActivity(intent,
                     ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle());
-            if (pkg != null) prefs.edit().putString(LastApp.KEY_APP, pkg).apply();
+            // Not in onPause: the screensaver starting pauses Home too, and over Home it must read "Home in front".
+            if (pkg != null) prefs.edit().putString(LastApp.KEY_APP, pkg).putBoolean(LastApp.KEY_HOME_FRONT, false).apply();
         } catch (ActivityNotFoundException | SecurityException e) {
             Log.w(TAG, "could not open " + name + " with " + intent, e);
             Toast.makeText(this, getString(R.string.cant_open, name), Toast.LENGTH_SHORT).show();
@@ -989,21 +990,20 @@ public class MainActivity extends Activity {
         String key = movingKey;
         Map<String, Integer> before = slots();
         tiles = moveStart;
-        endMove();
         int pos = Tiles.indexOf(tiles, key);
-        if (pos < 0) {
-            render();
-            return;
-        }
-        Grid home = Grid.at(pos, focus);
-        if (glide && home.page != focus.page) {
-            turnTo(home);
+        Grid home = pos >= 0 ? Grid.at(pos, focus) : focus;
+        if (pos < 0 || (glide && home.page != focus.page)) {
+            endMove();
+            if (pos < 0) render();
+            else turnTo(home);
             return;
         }
         focus = home;
         rememberFocusedKey();
+        // Drawn still lifted at its home slot, glided there, then the lift eases off.
         render();
         if (glide) glide(before);
+        endMove();
     }
 
     private void endMove() {
@@ -1183,6 +1183,23 @@ public class MainActivity extends Activity {
         cancelMove(false);
         handler.removeCallbacks(lift);
         coverForIntro();
+        // A plain white page first: the TV plays its own wake animation over the screen, so typing waits until
+        // Home has window focus and then intro_delay_ms more. Keys skip it all along.
+        introCursor.setVisibility(View.INVISIBLE);
+        introAwaitingFocus = !hasWindowFocus();
+        if (!introAwaitingFocus) handler.postAtTime(this::typeIntro, introToken, SystemClock.uptimeMillis() + config.introDelayMs);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && introRunning && introAwaitingFocus) {
+            introAwaitingFocus = false;
+            handler.postAtTime(this::typeIntro, introToken, SystemClock.uptimeMillis() + config.introDelayMs);
+        }
+    }
+
+    private void typeIntro() {
         String line = greeting.getText().toString();
         int[] times = Typing.schedule(line, random);
         long t0 = SystemClock.uptimeMillis();
@@ -1282,9 +1299,12 @@ public class MainActivity extends Activity {
         if (introBootPending || SystemClock.uptimeMillis() - screenOnAt < WAKE_WINDOW_MS) {
             introBootPending = false;
             playIntro();
-        } else if (!introRunning) {
-            // Covered for an intro as the screen went off, but the screen woke into an app.
-            dropIntro();
+        } else if (!introRunning && intro.getVisibility() == View.VISIBLE) {
+            // Covered as the screen went off. SCREEN_ON may still be on its way; if it has not played the intro
+            // by then, the screen woke for something else and the cover goes. playIntro clears this check.
+            handler.postAtTime(() -> {
+                if (!introRunning) dropIntro();
+            }, introToken, SystemClock.uptimeMillis() + WAKE_WINDOW_MS);
         }
     }
 
@@ -1308,7 +1328,6 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         handler.removeCallbacks(lift);
-        prefs.edit().putBoolean(LastApp.KEY_HOME_FRONT, false).apply();
         // A move ends when Home leaves the screen: the tile goes back where it was.
         cancelMove(false);
     }
@@ -1319,19 +1338,19 @@ public class MainActivity extends Activity {
         started = false;
         stopped = true;
         okDown = false;
+        swallowUp = -1;
         unregisterReceiver(timeReceiver);
         if (livePulse != null) livePulse.pause();
         closeSheet(false);
-        // Screen going off: keep the white cover for the wake. Otherwise an app came in front.
+        // Screen going off (onStop can come before SCREEN_OFF): the white cover, ready for the wake. Otherwise an
+        // app came in front.
         PowerManager power = getSystemService(PowerManager.class);
-        if (power == null || power.isInteractive()) dropIntro();
-        else if (introRunning) coverForIntroStopped();
-    }
-
-    /** Stopped mid-intro by the screen going off: back to the plain white cover, ready for the next wake. */
-    private void coverForIntroStopped() {
-        introRunning = false;
-        coverForIntro();
+        if (power == null || power.isInteractive()) {
+            dropIntro();
+        } else {
+            introRunning = false;
+            coverForIntro();
+        }
     }
 
     @Override

@@ -41,6 +41,8 @@ final class VoxConfig {
     Set<String> hiddenApps = DEFAULT_HIDDEN;
     float saverEntrySpeed = 0.8f;
     float saverTrackingEm = 0.8f;
+    /** How long the wake intro holds a plain white page after Home has focus, so the TV's own wake animation ends first. */
+    int introDelayMs = 1500;
     /** The text was given but is not a JSON object, so every value is the default. */
     boolean fileIgnored;
 
@@ -86,6 +88,7 @@ final class VoxConfig {
         c.focusScale = number(m.get("focus_scale"), REST_SCALE, MAX_FOCUS_SCALE, c.focusScale, false);
         c.saverEntrySpeed = number(m.get("saver_entry_speed"), 0f, 5f, c.saverEntrySpeed, false);
         c.saverTrackingEm = number(m.get("saver_tracking_em"), 0f, 2f, c.saverTrackingEm, true);
+        c.introDelayMs = Math.round(number(m.get("intro_delay_ms"), 0f, 5000f, c.introDelayMs, true));
         Object live = m.get("live_uri");
         if (live instanceof String && ((String) live).matches("[A-Za-z][A-Za-z0-9+.-]*://\\S+")) c.liveUri = (String) live;
         List<String> hidden = strings(m.get("hidden_apps"));

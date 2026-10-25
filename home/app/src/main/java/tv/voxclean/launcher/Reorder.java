@@ -41,7 +41,8 @@ final class Reorder {
                 return -1;
         }
         if (to >= count) {
-            if (to / Grid.PER_PAGE == page) return -1;
+            // Same page (a row not there yet), or past the last page: it stays.
+            if (to / Grid.PER_PAGE == page || page == Grid.pages(count) - 1) return -1;
             to = count - 1;
         }
         return to == pos ? -1 : to;

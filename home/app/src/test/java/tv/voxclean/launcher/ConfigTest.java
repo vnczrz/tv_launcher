@@ -20,6 +20,17 @@ public class ConfigTest {
         assertTrue(c.appLines.isEmpty());
         assertEquals(0.8f, c.saverEntrySpeed, 0f);
         assertEquals(0.8f, c.saverTrackingEm, 0f);
+        assertEquals(1500, c.introDelayMs);
+    }
+
+    @Test
+    public void introDelayIsMillisecondsUpToFiveSeconds() {
+        assertEquals(0, VoxConfig.parse("{\"intro_delay_ms\": 0}").introDelayMs);
+        assertEquals(2500, VoxConfig.parse("{\"intro_delay_ms\": 2500}").introDelayMs);
+        assertEquals(5000, VoxConfig.parse("{\"intro_delay_ms\": 5000}").introDelayMs);
+        assertEquals(1500, VoxConfig.parse("{\"intro_delay_ms\": 5001}").introDelayMs);
+        assertEquals(1500, VoxConfig.parse("{\"intro_delay_ms\": -1}").introDelayMs);
+        assertEquals(1500, VoxConfig.parse("{\"intro_delay_ms\": \"slow\"}").introDelayMs);
     }
 
     @Test

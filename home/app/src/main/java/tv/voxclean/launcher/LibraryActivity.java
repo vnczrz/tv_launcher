@@ -297,7 +297,7 @@ public class LibraryActivity extends Activity {
         choices.set(pkg, hide);
         if (!store.write(choices.lines())) {
             Log.e(TAG, "Library: " + pkg + (hide ? " hidden" : " shown") + " in memory only; the save was refused");
-            Toast.makeText(this, R.string.cant_save, Toast.LENGTH_LONG).show();
+            Toast.makeText(this, R.string.library_cant_save, Toast.LENGTH_LONG).show();
         }
         paint(true);
     }

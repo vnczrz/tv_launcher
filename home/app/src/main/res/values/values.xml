@@ -6,6 +6,7 @@
     <string name="page_label">PAGE %1$d / %2$d</string>
     <string name="moving_hint">MOVING · ARROWS TO PLACE · OK TO DROP · BACK TO CANCEL</string>
     <string name="cant_save">CAN\'T SAVE. THE CHANGE LASTS UNTIL HOME RESTARTS</string>
+    <string name="library_cant_save">CAN\'T SAVE. HOME KEEPS THE LAST SAVED CHOICE</string>
     <string name="settings_title">SETTINGS</string>
     <string name="library_title">LIBRARY</string>
     <!-- %1$d: installed apps; %2$d: how many of them are on Home. -->

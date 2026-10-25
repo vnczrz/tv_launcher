@@ -57,6 +57,14 @@ public class ReorderTest {
     }
 
     @Test
+    public void rightAtTheEndOfTheLastPageStays() {
+        // 22 tiles: the last page holds 16-21; its top-right tile (19) has no next page to go to.
+        assertEquals(-1, Reorder.target(19, Grid.Key.RIGHT, 22));
+        assertEquals(-1, Reorder.target(21, Grid.Key.RIGHT, 22));
+        assertEquals(-1, Reorder.target(7, Grid.Key.RIGHT, 8));
+    }
+
+    @Test
     public void targetNeverEqualsPos() {
         for (int count = 1; count <= 24; count++) {
             for (int pos = 0; pos < count; pos++) {

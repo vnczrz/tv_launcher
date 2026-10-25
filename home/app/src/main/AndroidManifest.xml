@@ -31,7 +31,8 @@
         </intent>
         <intent>
             <action android:name="android.settings.HOME_SETTINGS" />
-        </intent>        <intent>
+        </intent>
+        <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
         </intent>

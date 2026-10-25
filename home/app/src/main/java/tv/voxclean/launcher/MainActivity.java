@@ -110,6 +110,8 @@ public class MainActivity extends Activity {
     private String focusedKey;
     /** stopped: Home left the screen since it was last resumed (an app came in front). */
     private boolean started, stopped, stale = true, turning, okDown;
+    /** The app Home itself just opened, for the screensaver's fallback record; null when Home opened none. */
+    private String openedPkg;
     private int packageSequence;
     private String greetingSlot;
 
@@ -905,8 +907,7 @@ public class MainActivity extends Activity {
         try {
             startActivity(intent,
                     ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle());
-            // Not in onPause: the screensaver starting pauses Home too, and over Home it must read "Home in front".
-            if (pkg != null) prefs.edit().putString(LastApp.KEY_APP, pkg).putBoolean(LastApp.KEY_HOME_FRONT, false).apply();
+            openedPkg = pkg;
         } catch (ActivityNotFoundException | SecurityException e) {
             Log.w(TAG, "could not open " + name + " with " + intent, e);
             Toast.makeText(this, getString(R.string.cant_open, name), Toast.LENGTH_SHORT).show();
@@ -1315,6 +1316,7 @@ public class MainActivity extends Activity {
         boolean fromApp = stopped;
         // Cleared here, not in onStart: Home pressed in an app delivers onNewIntent after onStart (Android 14).
         stopped = false;
+        openedPkg = null;
         prefs.edit().putBoolean(LastApp.KEY_HOME_FRONT, true).apply();
         // A package change whose broadcast never arrived still shows up in PackageManager's change record.
         if (stale || changedSince(packageSequence).any) loadTiles();
@@ -1340,6 +1342,14 @@ public class MainActivity extends Activity {
         stopped = true;
         okDown = false;
         swallowUp = -1;
+        // The screensaver's fallback record (LastApp.PREFS): Home is off the screen. The app in front is known only
+        // when Home opened it; one the remote or voice opened is stored as none, never an older app. The screensaver
+        // starting over Home also lands here, as none, which reads as the time-of-day lines, as it should.
+        SharedPreferences.Editor record = prefs.edit().putBoolean(LastApp.KEY_HOME_FRONT, false);
+        if (openedPkg != null) record.putString(LastApp.KEY_APP, openedPkg);
+        else record.remove(LastApp.KEY_APP);
+        record.apply();
+        openedPkg = null;
         unregisterReceiver(timeReceiver);
         if (livePulse != null) livePulse.pause();
         closeSheet(false);

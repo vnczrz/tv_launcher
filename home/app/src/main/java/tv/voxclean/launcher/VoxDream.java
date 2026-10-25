@@ -9,7 +9,6 @@ import android.util.Log;
 
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
@@ -20,7 +19,11 @@ import java.util.Random;
  */
 public class VoxDream extends DreamService {
     private static final String TAG = "Vox";
-    private static final long LOOKBACK_MS = 10 * 60_000L;
+    /**
+     * Far enough back to hold the front app's last resume even after a long watch (a film, then a pause, then idle):
+     * the walk goes newest first and stops at the first resume, so the length costs only the query.
+     */
+    private static final long LOOKBACK_MS = 24 * 3600_000L;
     /** The wide window of spikes/vox/FINDINGS.md (b): a daily bucket filed under a future date answers only to it. */
     private static final long WIDE_END_MS = 2 * 366 * 24 * 3600_000L, SLACK_MS = 60_000L;
 
@@ -76,34 +79,31 @@ public class VoxDream extends DreamService {
         }
     }
 
-    /** The package in front when the dream started, or null for Home or not known. */
+    /** The package in front when the dream started, or null for Vox itself (Home, the Library) or not known. */
     private String lastApp() {
         long now = System.currentTimeMillis();
         try {
             UsageStatsManager usm = getSystemService(UsageStatsManager.class);
             if (usm != null) {
-                String window = "narrow";
-                List<LastApp.Event> events = events(usm.queryEvents(now - LOOKBACK_MS, now), Long.MAX_VALUE);
-                if (events.isEmpty()) {
-                    window = "wide";
-                    events = events(usm.queryEvents(now - LOOKBACK_MS, now + WIDE_END_MS), now + SLACK_MS);
-                }
-                if (!events.isEmpty()) {
-                    Log.i(TAG, "usage: " + window + " " + events.size() + " events; last resumed " + lastResumed(events));
-                    return LastApp.from(events, getPackageName(), MainActivity.class.getName());
-                }
+                List<LastApp.Event> narrow = events(usm.queryEvents(now - LOOKBACK_MS, now));
+                List<LastApp.Event> wide = events(usm.queryEvents(now - LOOKBACK_MS, now + WIDE_END_MS));
+                List<LastApp.Event> events = LastApp.merge(narrow, wide, now + SLACK_MS);
+                String pkg = LastApp.from(events, getPackageName());
+                Log.i(TAG, "usage: narrow " + narrow.size() + ", wide " + wide.size() + ", merged " + events.size()
+                        + " events; last resumed " + lastResumed(events));
+                if (pkg != null) return pkg.equals(getPackageName()) ? null : pkg;
             }
         } catch (SecurityException e) {
             Log.w(TAG, "usage stats not allowed (appops GET_USAGE_STATS); using Home's own record", e);
         }
         SharedPreferences prefs = getSharedPreferences(LastApp.PREFS, MODE_PRIVATE);
         String app = prefs.getBoolean(LastApp.KEY_HOME_FRONT, true) ? null : prefs.getString(LastApp.KEY_APP, null);
-        Log.i(TAG, "usage: none, fallback " + app);
+        Log.i(TAG, "usage: not known from events, fallback " + app);
         return app;
     }
 
     @SuppressWarnings("deprecation")   // MOVE_TO_FOREGROUND/BACKGROUND: ACTIVITY_RESUMED/PAUSED's values, API 26 names
-    private static List<LastApp.Event> events(UsageEvents usage, long notAfter) {
+    private static List<LastApp.Event> events(UsageEvents usage) {
         List<LastApp.Event> out = new ArrayList<>();
         if (usage == null) return out;
         UsageEvents.Event e = new UsageEvents.Event();
@@ -112,10 +112,8 @@ public class VoxDream extends DreamService {
             int type = e.getEventType();
             boolean resumed = type == UsageEvents.Event.MOVE_TO_FOREGROUND;
             if (!resumed && type != UsageEvents.Event.MOVE_TO_BACKGROUND) continue;
-            if (e.getTimeStamp() > notAfter) continue;
             out.add(new LastApp.Event(e.getPackageName(), e.getClassName(), resumed, e.getTimeStamp()));
         }
-        out.sort(Comparator.comparingLong(ev -> ev.time));
         return out;
     }
 

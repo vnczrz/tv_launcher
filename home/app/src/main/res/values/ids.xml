@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="spring_x" type="id" />
+    <item name="spring_y" type="id" />
+    <item name="color_anim" type="id" />
+</resources>

@@ -1,0 +1,6 @@
+# Keystore passwords (see build-and-install.sh); never committed.
+.env
+local.properties
+.gradle/
+build/
+app/build/

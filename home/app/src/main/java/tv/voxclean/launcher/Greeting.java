@@ -31,6 +31,16 @@ final class Greeting {
         }
     }
 
+    /** The screensaver's lines when an app was in front; {APP} is the app's name. */
+    static final List<String> APP_LINES = Arrays.asList(
+            "Back to {APP}?", "More {APP}?", "Still on {APP}?", "{APP}, paused.", "Pick up {APP}?");
+
+    /** @param overrides config.json's app_lines; empty keeps the built-in ones */
+    static String appLine(String app, List<String> overrides, Random random) {
+        List<String> lines = overrides.isEmpty() ? APP_LINES : overrides;
+        return lines.get(random.nextInt(lines.size())).replace("{APP}", app).toUpperCase(Locale.ROOT);
+    }
+
     /** @param overrides config.json's greetings: a slot listed there replaces the built-in lines. */
     static String pick(int hour, Map<String, List<String>> overrides, Random random) {
         String slot = slot(hour);

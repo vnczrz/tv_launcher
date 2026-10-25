@@ -13,13 +13,33 @@ import org.junit.Test;
 
 public class ConfigTest {
     private static void assertDefaults(VoxConfig c) {
-        assertEquals(0.954f, c.focusScale, 0f);
+        assertEquals(0.95f, c.focusScale, 0f);
         assertEquals(VoxConfig.DEFAULT_LIVE_URI, c.liveUri);
         assertEquals(VoxConfig.DEFAULT_HIDDEN, c.hiddenApps);
         assertTrue(c.greetings.isEmpty());
         assertTrue(c.appLines.isEmpty());
         assertEquals(0.8f, c.saverEntrySpeed, 0f);
         assertEquals(0.8f, c.saverTrackingEm, 0f);
+        assertEquals(2000, c.introDelayMs);
+        assertEquals(2, c.introCursorBlinks);
+    }
+
+    @Test
+    public void introDelayIsMillisecondsUpToFiveSeconds() {
+        assertEquals(0, VoxConfig.parse("{\"intro_delay_ms\": 0}").introDelayMs);
+        assertEquals(2500, VoxConfig.parse("{\"intro_delay_ms\": 2500}").introDelayMs);
+        assertEquals(5000, VoxConfig.parse("{\"intro_delay_ms\": 5000}").introDelayMs);
+        assertEquals(2000, VoxConfig.parse("{\"intro_delay_ms\": 5001}").introDelayMs);
+        assertEquals(2000, VoxConfig.parse("{\"intro_delay_ms\": -1}").introDelayMs);
+        assertEquals(2000, VoxConfig.parse("{\"intro_delay_ms\": \"slow\"}").introDelayMs);
+    }
+
+    @Test
+    public void introCursorBlinksFromNoneToSix() {
+        assertEquals(0, VoxConfig.parse("{\"intro_cursor_blinks\": 0}").introCursorBlinks);
+        assertEquals(6, VoxConfig.parse("{\"intro_cursor_blinks\": 6}").introCursorBlinks);
+        assertEquals(2, VoxConfig.parse("{\"intro_cursor_blinks\": 7}").introCursorBlinks);
+        assertEquals(2, VoxConfig.parse("{\"intro_cursor_blinks\": -1}").introCursorBlinks);
     }
 
     @Test
@@ -55,7 +75,7 @@ public class ConfigTest {
                 + " \"greetings\": {\"morning\": [], \"evening\": [\"Hi.\"], \"noon\": [\"x\"]},"
                 + " \"unknown_key\": true, \"saver_tracking_em\": 0.6}");
         assertFalse(c.fileIgnored);
-        assertEquals(0.954f, c.focusScale, 0f);
+        assertEquals(0.95f, c.focusScale, 0f);
         assertEquals(VoxConfig.DEFAULT_LIVE_URI, c.liveUri);
         assertEquals(VoxConfig.DEFAULT_HIDDEN, c.hiddenApps);
         assertTrue(c.appLines.isEmpty());
@@ -67,9 +87,11 @@ public class ConfigTest {
 
     @Test
     public void focusScaleMustGrowTheTile() {
-        assertEquals(0.954f, VoxConfig.parse("{\"focus_scale\": 0.9}").focusScale, 0f);
-        assertEquals(0.954f, VoxConfig.parse("{\"focus_scale\": 3}").focusScale, 0f);
-        assertEquals(0.97f, VoxConfig.parse("{\"focus_scale\": 0.97}").focusScale, 0f);
+        assertEquals(0.95f, VoxConfig.parse("{\"focus_scale\": 0.72}").focusScale, 0f);
+        assertEquals(0.73f, VoxConfig.parse("{\"focus_scale\": 0.73}").focusScale, 0f);
+        assertEquals(1.0f, VoxConfig.parse("{\"focus_scale\": 1.0}").focusScale, 0f);
+        assertEquals(0.95f, VoxConfig.parse("{\"focus_scale\": 1.01}").focusScale, 0f);
+        assertEquals(0.95f, VoxConfig.parse("{\"focus_scale\": 3}").focusScale, 0f);
     }
 
     @Test

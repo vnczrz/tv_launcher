@@ -786,6 +786,10 @@ public class MainActivity extends Activity {
                 okDown = true;
                 // Hold OK on a tile to pick it up.
                 if (!focus.header && !turning && focus.position() < tiles.size()) handler.postDelayed(lift, HOLD_MS);
+            } else if (event.isLongPress() && okDown) {
+                // The system's long-press repeat (also what `input keyevent --longpress` sends) lifts at once.
+                handler.removeCallbacks(lift);
+                startMove();
             }
             return true;
         }
@@ -1127,9 +1131,9 @@ public class MainActivity extends Activity {
                 open(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "SETTINGS", null);
                 break;
             case SHEET_RESTART:
-                // An app cannot restart the TV itself; Android's System screen holds Restart.
-                open(new Intent(Settings.ACTION_DEVICE_INFO_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        "RESTART", null);
+                // An app cannot restart the TV: TV Settings' reboot broadcast needs READ_PRIVILEGED_PHONE_STATE, and
+                // no public intent opens its System screen. Restart is at Android settings > System > Restart.
+                open(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "SETTINGS", null);
                 break;
             default:
                 break;

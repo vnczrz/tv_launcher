@@ -4,7 +4,8 @@
 #   TV_HOST=<tv ip> home/home-config.sh --reset       remove it: every value back to the default
 # Keys (all optional; a bad value is ignored on its own, a file that does not parse is ignored as a whole):
 #   focus_scale, greetings {morning|afternoon|evening|late: [lines]}, app_lines, live_uri, hidden_apps,
-#   saver_entry_speed, saver_tracking_em, intro_delay_ms (0-5000: white page before the wake intro types).
+#   saver_entry_speed, saver_tracking_em, intro_delay_ms (0-5000: white page before the
+#   wake intro's cursor appears), intro_cursor_blinks (0-6: blink cycles before typing).
 # The file goes to Vox's external files directory (/sdcard/Android/data/<pkg>/files), which the shell can write on
 # Android 14; there the copy belongs to Vox's uid and Vox reads it (Google TV 14). logcat -s Vox prints what it read.
 set -euo pipefail
@@ -23,7 +24,7 @@ case "${1:-}" in
   --reset)
     tv "rm -f $DIR/config.json; $RESTART; echo config.json removed"
     exit 0 ;;
-  ''|-*) sed -n '2,9p' "$0" >&2; exit 1 ;;
+  ''|-*) sed -n '2,10p' "$0" >&2; exit 1 ;;
 esac
 CONFIG=$1
 [ -f "$CONFIG" ] || { echo "ERROR: no such file: $1" >&2; exit 1; }

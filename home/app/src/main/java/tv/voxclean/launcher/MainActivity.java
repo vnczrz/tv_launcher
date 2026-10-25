@@ -1201,7 +1201,8 @@ public class MainActivity extends Activity {
 
     private void typeIntro() {
         String line = greeting.getText().toString();
-        int[] times = Typing.schedule(line, random);
+        // The cursor appears and blinks alone for intro_cursor_blinks full cycles (hard on/off) before the first key.
+        int[] times = Typing.schedule(line, random, (int) (config.introCursorBlinks * 2 * BLINK_MS));
         long t0 = SystemClock.uptimeMillis();
         startBlink();
         if (times.length > 0) at(t0, times[0] - 10, this::solidCursor);

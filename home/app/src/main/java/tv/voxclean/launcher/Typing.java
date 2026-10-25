@@ -21,8 +21,13 @@ final class Typing {
 
     /** @return when each character appears: times[i] shows the first i + 1 characters */
     static int[] schedule(String text, Random random) {
+        return schedule(text, random, LEAD_MS);
+    }
+
+    /** @param leadMs how long the cursor blinks before the first key */
+    static int[] schedule(String text, Random random, int leadMs) {
         int[] times = new int[text.length()];
-        double t = LEAD_MS;
+        double t = leadMs;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             t += KEY_MIN_MS + random.nextDouble() * KEY_SPREAD_MS;

@@ -20,7 +20,8 @@ public class ConfigTest {
         assertTrue(c.appLines.isEmpty());
         assertEquals(0.8f, c.saverEntrySpeed, 0f);
         assertEquals(0.8f, c.saverTrackingEm, 0f);
-        assertEquals(1500, c.introDelayMs);
+        assertEquals(2000, c.introDelayMs);
+        assertEquals(2, c.introCursorBlinks);
     }
 
     @Test
@@ -28,9 +29,17 @@ public class ConfigTest {
         assertEquals(0, VoxConfig.parse("{\"intro_delay_ms\": 0}").introDelayMs);
         assertEquals(2500, VoxConfig.parse("{\"intro_delay_ms\": 2500}").introDelayMs);
         assertEquals(5000, VoxConfig.parse("{\"intro_delay_ms\": 5000}").introDelayMs);
-        assertEquals(1500, VoxConfig.parse("{\"intro_delay_ms\": 5001}").introDelayMs);
-        assertEquals(1500, VoxConfig.parse("{\"intro_delay_ms\": -1}").introDelayMs);
-        assertEquals(1500, VoxConfig.parse("{\"intro_delay_ms\": \"slow\"}").introDelayMs);
+        assertEquals(2000, VoxConfig.parse("{\"intro_delay_ms\": 5001}").introDelayMs);
+        assertEquals(2000, VoxConfig.parse("{\"intro_delay_ms\": -1}").introDelayMs);
+        assertEquals(2000, VoxConfig.parse("{\"intro_delay_ms\": \"slow\"}").introDelayMs);
+    }
+
+    @Test
+    public void introCursorBlinksFromNoneToSix() {
+        assertEquals(0, VoxConfig.parse("{\"intro_cursor_blinks\": 0}").introCursorBlinks);
+        assertEquals(6, VoxConfig.parse("{\"intro_cursor_blinks\": 6}").introCursorBlinks);
+        assertEquals(2, VoxConfig.parse("{\"intro_cursor_blinks\": 7}").introCursorBlinks);
+        assertEquals(2, VoxConfig.parse("{\"intro_cursor_blinks\": -1}").introCursorBlinks);
     }
 
     @Test

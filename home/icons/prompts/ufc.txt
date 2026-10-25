@@ -1,0 +1,18 @@
+Use case: stylized-concept
+Asset type: isolated isometric voxel icon
+Primary request: the UFC logo: a red rectangular plate with the white letters "UFC" in a bold wordmark, as one chunky voxel object.
+Input image: internally generated bundled reference sheet used only for voxel construction, camera, material, lighting, and visual density; do not infer its subjects or copy its composition.
+Scene/backdrop: perfectly flat neutral light-gray #F4F4F4 background with generous empty space; uniform edge to edge, no warm tint, gradient, vignette, environment, horizon, or floor.
+Output handling: the final canvas remains opaque RGB with exact #F4F4F4 in every clean background region; no transparency or alpha background.
+Palette mode: native.
+Color plan: native_signature dominant = UFC red (around #D20A0A) on the plate; companion = white (around #F8F8F8) on the letters; accent none; neutrals none.
+Subject: a wide red slab about 2 base modules thick; on its front face three bold white block letters U, F, C inlaid or raised, chunky strokes at least one base module thick; retain these identity cues: red plate, bold white "UFC".
+Construction: low-density macro-voxel geometry on one coarse base-module grid. Use about 12–30 visible rectangular blocks, normally no more than 40. Make every block dimension an integer multiple of the base module. Prefer large cuboids: each stem is one tall block; the diagonal is built as a short staircase of 5–7 merged steps; hide internal coplanar seams; no smooth base mesh.
+Series voxel scale: this is a later asset of the series; match the Netflix reference icon exactly: same projected base module (about 5–7% of the canvas short side, roughly 63–88 px on 1254×1254), same camera and zoom. Build the dominant span from about 10–12 base modules, hard range 6–14. Simplify rather than densify the grid.
+Camera: orthographic three-quarter isometric view, slightly elevated, showing top, front, and one side consistently; the object faces the viewer at a three-quarter angle so it reads clearly.
+Composition/framing: square 1:1, centered suspended object occupying roughly 55–65% of the frame; preserve clear empty background beneath it.
+Lighting/mood: even high-key illumination expressed as whole-face value steps plus a restrained broad area-light reflection: every top face is uniformly brighter across its full area, every front face uses one uniform middle tone, and every side face uses one uniform darker tone. Keep external shadows extremely faint and diffuse, with no readable grounding patch or colored spill.
+Materials/textures: solid opaque cast-acrylic blocks with fully covering saturated red and a restrained polished surface. Each visible plane one clean, nearly uniform tone; the source-facing plane carries a broad mild sheen. No edge highlight, rim light, bright outline, point hotspot, narrow reflection stripe, strong gradient within a face, transmission, refraction, grain, texture, bevel, glass, waxy plastic, or chrome.
+Text (verbatim): none (shapes are built as 3D objects, not printed text).
+Constraints: the three letters U F C must be legible at 120 px; simplify into blocky forms, no extra marks.
+Avoid: drop shadows, contact shadow, floor plane, pedestal, gradients, vignette, 2D pixel art, Minecraft environment, toy-brick studs, rounded voxels, smooth mesh, low-poly triangles, outlines, translucent material, edge highlights, white block outlines, surface texture, scenery, the word NETFLIX, any extra letters, watermark, any text or lettering.

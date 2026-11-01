@@ -31,6 +31,7 @@ final class Voxel {
             case "com.tubitv": return R.drawable.vox_tubi;
             case "tv.pluto.android": return R.drawable.vox_pluto_tv;
             case "com.android.vending": return R.drawable.vox_play_store;
+            case "tv.voxclean.spelunkr": return R.drawable.vox_spelunkr;
             // Not installed there: the Android TV package names as published, unconfirmed on a device.
             case "com.disney.disneyplus": return R.drawable.vox_disney_plus;
             case "com.hulu.livingroomplus": return R.drawable.vox_hulu;

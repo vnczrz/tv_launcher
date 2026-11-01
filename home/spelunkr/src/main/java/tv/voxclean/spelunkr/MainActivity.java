@@ -153,6 +153,14 @@ public class MainActivity extends Activity {
         web.onResume();
     }
 
+    // Leaving by Home (or anything else that covers the app) closes it: the site keeps playing while hidden, and the
+    // tile should open a fresh page that tunes in live.
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (!isChangingConfigurations()) finish();
+    }
+
     @Override
     protected void onDestroy() {
         web.destroy();

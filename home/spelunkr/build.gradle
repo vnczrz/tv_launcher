@@ -1,0 +1,46 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Signed with Vox's release key from home/.env (see app/build.gradle), so updates install over each other.
+def voxEnv = new Properties()
+def envFile = rootProject.file('.env')
+if (envFile.exists()) envFile.withInputStream { voxEnv.load(it) }
+def releaseStore = voxEnv.getProperty('VOX_KEYSTORE') ? file(voxEnv.getProperty('VOX_KEYSTORE')) : null
+
+android {
+    namespace 'tv.voxclean.spelunkr'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'tv.voxclean.spelunkr'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '0.1'
+    }
+
+    signingConfigs {
+        release {
+            if (releaseStore != null && releaseStore.exists()) {
+                storeFile releaseStore
+                storePassword voxEnv.getProperty('VOX_KEYSTORE_PASSWORD')
+                keyAlias voxEnv.getProperty('VOX_KEY_ALIAS')
+                keyPassword voxEnv.getProperty('VOX_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            signingConfig releaseStore != null && releaseStore.exists() ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
